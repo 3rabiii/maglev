@@ -180,22 +180,62 @@ func (api *RestAPI) arrivalsAndDeparturesForStopHandler(w http.ResponseWriter, r
 	// Add the current stop
 	stopIDSet[stop.ID] = true
 
+	routeIDsMap := make(map[string]bool)
+	tripIDsMap := make(map[string]bool)
+
 	for _, st := range stopTimes {
-		route, err := api.GtfsManager.GtfsDB.Queries.GetRoute(ctx, st.RouteID)
-		if err != nil {
-			api.Logger.Debug("skipping stop time: route not found",
-				slog.String("routeID", st.RouteID),
-				slog.String("tripID", st.TripID),
-				slog.Any("error", err))
+		if st.RouteID != "" {
+			routeIDsMap[st.RouteID] = true
+		}
+		if st.TripID != "" {
+			tripIDsMap[st.TripID] = true
+		}
+	}
+
+	uniqueRouteIDs := make([]string, 0, len(routeIDsMap))
+	for id := range routeIDsMap {
+		uniqueRouteIDs = append(uniqueRouteIDs, id)
+	}
+
+	uniqueTripIDs := make([]string, 0, len(tripIDsMap))
+	for id := range tripIDsMap {
+		uniqueTripIDs = append(uniqueTripIDs, id)
+	}
+
+	allRoutes, err := api.GtfsManager.GtfsDB.Queries.GetRoutesByIDs(ctx, uniqueRouteIDs)
+	if err != nil {
+		api.serverErrorResponse(w, r, err)
+		return
+	}
+
+	allTrips, err := api.GtfsManager.GtfsDB.Queries.GetTripsByIDs(ctx, uniqueTripIDs)
+	if err != nil {
+		api.serverErrorResponse(w, r, err)
+		return
+	}
+
+	routesLookup := make(map[string]gtfsdb.Route)
+	for _, r := range allRoutes {
+		routesLookup[r.ID] = r
+	}
+
+	tripsLookup := make(map[string]gtfsdb.Trip)
+	for _, t := range allTrips {
+		tripsLookup[t.ID] = t
+	}
+
+	for _, st := range stopTimes {
+		route, routeExists := routesLookup[st.RouteID]
+		if !routeExists {
+			api.Logger.Debug("skipping stop time: route not found in batch fetch",
+				slog.String("routeID", st.RouteID))
 			continue
 		}
 
-		trip, err := api.GtfsManager.GtfsDB.Queries.GetTrip(ctx, st.TripID)
-		if err != nil {
-			api.Logger.Debug("skipping stop time: trip not found",
-				slog.String("routeID", st.RouteID),
-				slog.String("tripID", st.TripID),
-				slog.Any("error", err))
+		trip, tripExists := tripsLookup[st.TripID]
+		if !tripExists {
+			api.Logger.Debug("skipping stop time: trip not found in batch fetch",
+				slog.String("tripID", st.TripID))
 			continue
 		}
 
