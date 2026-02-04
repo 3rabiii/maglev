@@ -2,6 +2,7 @@ package gtfs
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -36,7 +37,9 @@ func loadRealtimeData(ctx context.Context, source string, headers map[string]str
 		req.Header.Add(key, value)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	client := http.DefaultClient
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -44,12 +47,16 @@ func loadRealtimeData(ctx context.Context, source string, headers map[string]str
 		slog.Default().With(slog.String("component", "gtfs_realtime_downloader")),
 		"http_response_body")
 
-	b, err := io.ReadAll(resp.Body)
+	const maxBodySize = 25 * 1024 * 1024
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize+1))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	if int64(len(body)) > maxBodySize {
+		return nil, fmt.Errorf("GTFS-RT response exceeds size limit of %d bytes", maxBodySize)
 	}
 
-	return gtfs.ParseRealtime(b, &gtfs.ParseRealtimeOptions{})
+	return gtfs.ParseRealtime(body, &gtfs.ParseRealtimeOptions{})
 }
 
 func (manager *Manager) GetAlertsForRoute(routeID string) []gtfs.Alert {
