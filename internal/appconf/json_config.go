@@ -254,6 +254,32 @@ func LoadFromFile(path string) (*JSONConfig, error) {
 	// Apply defaults
 	config.setDefaults()
 
+	// Override API Keys: Check if keys are provided via Env Vars
+	if envKeys := os.Getenv("GTFS_API_KEYS"); envKeys != "" {
+		rawKeys := strings.Split(envKeys, ",")
+		var cleanKeys []string
+		for _, k := range rawKeys {
+			if trimmed := strings.TrimSpace(k); trimmed != "" {
+				cleanKeys = append(cleanKeys, trimmed)
+			}
+		}
+		if len(cleanKeys) > 0 {
+			config.ApiKeys = cleanKeys
+		}
+	}
+
+	// Override Static Feed Auth: Securely load static feed token
+	if staticAuth := os.Getenv("GTFS_STATIC_AUTH_VALUE"); staticAuth != "" {
+		config.GtfsStaticFeed.AuthHeaderValue = staticAuth
+	}
+
+	// Override Realtime Feed Auth: Securely load realtime feed token
+	if rtAuth := os.Getenv("GTFS_REALTIME_AUTH_VALUE"); rtAuth != "" {
+		if len(config.GtfsRtFeeds) > 0 {
+			config.GtfsRtFeeds[0].RealTimeAuthHeaderValue = rtAuth
+		}
+	}
+
 	// Validate
 	if err := config.validate(); err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
