@@ -180,25 +180,25 @@ func (api *RestAPI) arrivalsAndDeparturesForStopHandler(w http.ResponseWriter, r
 	// Add the current stop
 	stopIDSet[stop.ID] = true
 
-	routeIDsMap := make(map[string]bool)
-	tripIDsMap := make(map[string]bool)
+	batchRouteIDs := make(map[string]bool)
+	batchTripIDs := make(map[string]bool)
 
 	for _, st := range stopTimes {
 		if st.RouteID != "" {
-			routeIDsMap[st.RouteID] = true
+			batchRouteIDs[st.RouteID] = true
 		}
 		if st.TripID != "" {
-			tripIDsMap[st.TripID] = true
+			batchTripIDs[st.TripID] = true
 		}
 	}
 
-	uniqueRouteIDs := make([]string, 0, len(routeIDsMap))
-	for id := range routeIDsMap {
+	uniqueRouteIDs := make([]string, 0, len(batchRouteIDs))
+	for id := range batchRouteIDs {
 		uniqueRouteIDs = append(uniqueRouteIDs, id)
 	}
 
-	uniqueTripIDs := make([]string, 0, len(tripIDsMap))
-	for id := range tripIDsMap {
+	uniqueTripIDs := make([]string, 0, len(batchTripIDs))
+	for id := range batchTripIDs {
 		uniqueTripIDs = append(uniqueTripIDs, id)
 	}
 
@@ -215,13 +215,13 @@ func (api *RestAPI) arrivalsAndDeparturesForStopHandler(w http.ResponseWriter, r
 	}
 
 	routesLookup := make(map[string]gtfsdb.Route)
-	for _, r := range allRoutes {
-		routesLookup[r.ID] = r
+	for _, route := range allRoutes {
+		routesLookup[route.ID] = route
 	}
 
 	tripsLookup := make(map[string]gtfsdb.Trip)
-	for _, t := range allTrips {
-		tripsLookup[t.ID] = t
+	for _, trip := range allTrips {
+		tripsLookup[trip.ID] = trip
 	}
 
 	for _, st := range stopTimes {
