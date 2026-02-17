@@ -1,14 +1,35 @@
 # Detect OS
 ifeq ($(OS),Windows_NT)
-    # Windows
     SET_ENV := set CGO_ENABLED=1 & set CGO_CFLAGS=-DSQLITE_ENABLE_FTS5 &
 else
-    # Linux/macOS
     SET_ENV := CGO_ENABLED=1 CGO_CFLAGS="-DSQLITE_ENABLE_FTS5"
 endif
 
 DOCKER_IMAGE := opentransitsoftwarefoundation/maglev
 
+GIT_COMMIT  := $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
+GIT_BRANCH  := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+BUILD_TIME  := $(shell date -u +'%Y-%m-%dT%H:%M:%SZ')
+GIT_COMMIT_TIME := $(shell git log -1 --pretty=format:'%aI' 2>/dev/null || echo "unknown")
+VERSION     := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+GIT_DIRTY   := $(shell test -n "`git status --porcelain`" && echo "true" || echo "false")
+GIT_EMAIL   := $(shell git log -1 --pretty=format:'%ae' 2>/dev/null || echo "unknown")
+GIT_NAME    := $(shell git log -1 --pretty=format:'%an' 2>/dev/null || echo "unknown")
+GIT_REMOTE  := $(shell git config --get remote.origin.url 2>/dev/null || echo "unknown")
+GIT_MSG     := $(shell git log -1 --pretty=format:'%s' 2>/dev/null || echo "unknown")
+BUILD_HOST  := $(shell hostname)
+
+LDFLAGS := -ldflags "-X 'maglev.onebusaway.org/internal/buildinfo.CommitHash=$(GIT_COMMIT)' \
+                     -X 'maglev.onebusaway.org/internal/buildinfo.Branch=$(GIT_BRANCH)' \
+                     -X 'maglev.onebusaway.org/internal/buildinfo.BuildTime=$(BUILD_TIME)' \
+                     -X 'maglev.onebusaway.org/internal/buildinfo.Version=$(VERSION)' \
+                     -X 'maglev.onebusaway.org/internal/buildinfo.CommitTime=$(GIT_COMMIT_TIME)' \
+                     -X 'maglev.onebusaway.org/internal/buildinfo.Dirty=$(GIT_DIRTY)' \
+                     -X 'maglev.onebusaway.org/internal/buildinfo.UserEmail=$(GIT_EMAIL)' \
+                     -X 'maglev.onebusaway.org/internal/buildinfo.UserName=$(GIT_NAME)' \
+                     -X 'maglev.onebusaway.org/internal/buildinfo.RemoteURL=$(GIT_REMOTE)' \
+                     -X 'maglev.onebusaway.org/internal/buildinfo.CommitMessage=$(GIT_MSG)' \
+                     -X 'maglev.onebusaway.org/internal/buildinfo.Host=$(BUILD_HOST)'"
 .PHONY: build build-debug clean coverage test run lint watch fmt \
 	gtfstidy models check-golangci-lint \
 	docker-build docker-push docker-run docker-stop docker-compose-up docker-compose-down docker-compose-dev docker-clean docker-clean-all
@@ -18,10 +39,10 @@ run: build
 	bin/maglev -f config.json
 
 build: gtfstidy
-	$(SET_ENV) go build -tags "sqlite_fts5" -o bin/maglev ./cmd/api
+	$(SET_ENV) go build -tags "sqlite_fts5" $(LDFLAGS) -o bin/maglev ./cmd/api
 
 build-debug: gtfstidy
-	$(SET_ENV) go build -tags "sqlite_fts5" -gcflags "all=-N -l" -o bin/maglev ./cmd/api
+	$(SET_ENV) go build -tags "sqlite_fts5" $(LDFLAGS) -gcflags "all=-N -l" -o bin/maglev ./cmd/api
 
 gtfstidy:
 	$(SET_ENV) go build -tags "sqlite_fts5" -o bin/gtfstidy github.com/patrickbr/gtfstidy

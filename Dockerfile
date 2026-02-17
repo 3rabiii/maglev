@@ -14,9 +14,32 @@ RUN go mod download
 COPY . .
 
 # Build the application with CGO enabled (required for SQLite)
-ARG TARGETARCH
-RUN CGO_ENABLED=1 GOOS=linux GOARCH=${TARGETARCH} go build -tags sqlite_fts5 -o maglev ./cmd/api
+ARG GIT_COMMIT=unknown
+ARG GIT_BRANCH=unknown
+ARG BUILD_TIME=unknown
+ARG VERSION=dev
+ARG GIT_DIRTY=false
+ARG GIT_EMAIL=unknown
+ARG GIT_NAME=unknown
+ARG GIT_REMOTE=unknown
+ARG GIT_MSG=unknown
+ARG BUILD_HOST=docker
+ARG GIT_COMMIT_TIME=unknown
 
+ARG TARGETARCH
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=${TARGETARCH} go build -tags sqlite_fts5 \
+    -ldflags "-X 'maglev.onebusaway.org/internal/buildinfo.CommitHash=${GIT_COMMIT}' \
+              -X 'maglev.onebusaway.org/internal/buildinfo.Branch=${GIT_BRANCH}' \
+              -X 'maglev.onebusaway.org/internal/buildinfo.BuildTime=${BUILD_TIME}' \
+              -X 'maglev.onebusaway.org/internal/buildinfo.Version=${VERSION}' \
+              -X 'maglev.onebusaway.org/internal/buildinfo.CommitTime=${GIT_COMMIT_TIME}' \
+              -X 'maglev.onebusaway.org/internal/buildinfo.Dirty=${GIT_DIRTY}' \
+              -X 'maglev.onebusaway.org/internal/buildinfo.UserEmail=${GIT_EMAIL}' \
+              -X 'maglev.onebusaway.org/internal/buildinfo.UserName=${GIT_NAME}' \
+              -X 'maglev.onebusaway.org/internal/buildinfo.RemoteURL=${GIT_REMOTE}' \
+              -X 'maglev.onebusaway.org/internal/buildinfo.CommitMessage=${GIT_MSG}' \
+              -X 'maglev.onebusaway.org/internal/buildinfo.Host=${BUILD_HOST}'" \
+    -o maglev ./cmd/api
 # Runtime stage
 FROM alpine:3.21
 
@@ -65,4 +88,3 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 # Default command - run with config file
 # Users should mount config.json or use command-line flags
 CMD ["./maglev", "-f", "config.json"]
-
