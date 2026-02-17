@@ -48,11 +48,12 @@ func (api *RestAPI) reportProblemWithTripHandler(w http.ResponseWriter, r *http.
 	vehicleID := query.Get("vehicleId")
 	stopID := query.Get("stopId")
 	code := query.Get("code")
-	userComment := query.Get("userComment")
+	userComment := utils.TruncateComment(query.Get("userComment"))
 	userOnVehicle := query.Get("userOnVehicle")
 	userVehicleNumber := query.Get("userVehicleNumber")
-	userLat := query.Get("userLat")
-	userLon := query.Get("userLon")
+	userLatStr := utils.ValidateNumericParam(query.Get("userLat"))
+	userLonStr := utils.ValidateNumericParam(query.Get("userLon"))
+
 	userLocationAccuracy := query.Get("userLocationAccuracy")
 
 	// TODO: Add storage logic for the problem report, I leave it as a log statement for now
@@ -66,8 +67,8 @@ func (api *RestAPI) reportProblemWithTripHandler(w http.ResponseWriter, r *http.
 		slog.String("user_comment", userComment),
 		slog.String("user_on_vehicle", userOnVehicle),
 		slog.String("user_vehicle_number", userVehicleNumber),
-		slog.String("user_lat", userLat),
-		slog.String("user_lon", userLon),
+		slog.String("user_lat", userLatStr),
+		slog.String("user_lon", userLonStr),
 		slog.String("user_location_accuracy", userLocationAccuracy))
 
 	api.sendResponse(w, r, models.NewOKResponse(struct{}{}, api.Clock))

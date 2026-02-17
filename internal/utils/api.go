@@ -217,3 +217,26 @@ func PaginateSlice[T any](items []T, offset, limit int) ([]T, bool) {
 
 	return items[offset:end], limitExceeded
 }
+
+// MaxCommentLength defines the maximum allowed characters for a user comment
+const MaxCommentLength = 500
+
+// TruncateComment safely truncates a comment to MaxCommentLength runes.
+func TruncateComment(s string) string {
+	runes := []rune(s)
+	if len(runes) > MaxCommentLength {
+		return string(runes[:MaxCommentLength])
+	}
+	return s
+}
+
+// ValidateNumericParam returns the string if it's a valid float, empty string otherwise.
+func ValidateNumericParam(s string) string {
+	if s == "" {
+		return ""
+	}
+	if _, err := strconv.ParseFloat(s, 64); err != nil {
+		return ""
+	}
+	return s
+}

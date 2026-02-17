@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -823,6 +824,94 @@ func TestPaginateSlice(t *testing.T) {
 			result, limitExceeded := PaginateSlice(tt.items, tt.offset, tt.limit)
 			assert.Equal(t, tt.expected, result)
 			assert.Equal(t, tt.limitExceeded, limitExceeded)
+		})
+	}
+}
+
+func TestTruncateComment(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "Empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "Short string (under limit)",
+			input:    "Hello World",
+			expected: "Hello World",
+		},
+		{
+			name:     "Exact limit (500 chars)",
+			input:    strings.Repeat("a", 500),
+			expected: strings.Repeat("a", 500),
+		},
+		{
+			name:     "Over limit (501 chars)",
+			input:    strings.Repeat("a", 501),
+			expected: strings.Repeat("a", 500),
+		},
+		{
+			name:     "Multi-byte characters (Arabic)",
+			input:    "مرحبا بك في مصر",
+			expected: "مرحبا بك في مصر",
+		},
+		{
+			name:     "Multi-byte overflow (Emoji)",
+			input:    strings.Repeat("🦁", 501),
+			expected: strings.Repeat("🦁", 500),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := TruncateComment(tt.input)
+			assert.Equal(t, tt.expected, result)
+			assert.True(t, len([]rune(result)) <= MaxCommentLength)
+		})
+	}
+}
+
+func TestValidateNumericParam(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "Empty string",
+			input:    "",
+			expected: "",
+		},
+		{
+			name:     "Valid float",
+			input:    "47.6097",
+			expected: "47.6097",
+		},
+		{
+			name:     "Valid negative float",
+			input:    "-122.3331",
+			expected: "-122.3331",
+		},
+		{
+			name:     "Invalid text",
+			input:    "invalid-coord",
+			expected: "",
+		},
+		{
+			name:     "Mixed text and numbers",
+			input:    "12abc",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ValidateNumericParam(tt.input)
+			assert.Equal(t, tt.expected, result)
 		})
 	}
 }

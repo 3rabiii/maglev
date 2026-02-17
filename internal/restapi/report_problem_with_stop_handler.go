@@ -43,11 +43,10 @@ func (api *RestAPI) reportProblemWithStopHandler(w http.ResponseWriter, r *http.
 	}
 
 	query := r.URL.Query()
-
 	code := query.Get("code")
-	userComment := query.Get("userComment")
-	userLat := query.Get("userLat")
-	userLon := query.Get("userLon")
+	userComment := utils.TruncateComment(query.Get("userComment"))
+	userLatStr := utils.ValidateNumericParam(query.Get("userLat"))
+	userLonStr := utils.ValidateNumericParam(query.Get("userLon"))
 	userLocationAccuracy := query.Get("userLocationAccuracy")
 
 	// TODO: Add storage logic for the problem report, I leave it as a log statement for now
@@ -56,8 +55,8 @@ func (api *RestAPI) reportProblemWithStopHandler(w http.ResponseWriter, r *http.
 		slog.String("stop_id", stopID),
 		slog.String("code", code),
 		slog.String("user_comment", userComment),
-		slog.String("user_lat", userLat),
-		slog.String("user_lon", userLon),
+		slog.String("user_lat", userLatStr),
+		slog.String("user_lon", userLonStr),
 		slog.String("user_location_accuracy", userLocationAccuracy))
 
 	api.sendResponse(w, r, models.NewOKResponse(struct{}{}, api.Clock))
