@@ -46,7 +46,7 @@ func setupShapeTest(t *testing.T, api *RestAPI, shapeID string, points []struct 
 }
 
 // decodePolylinePoints decodes a Google encoded polyline string into coordinate pairs.
-// Only used in shape handler tests to verify coordinate ordering.
+// Only used in shape handler tests.
 func decodePolylinePoints(t *testing.T, encoded string) [][]float64 {
 	t.Helper()
 	coords, _, err := polyline.DecodeCoords([]byte(encoded))
@@ -354,16 +354,19 @@ func TestShapesHandlerOrdersBySequence(t *testing.T) {
 
 	assert.Equal(t, float64(6), entry["length"])
 
-	points_str, ok := entry["points"].(string)
+	pointsStr, ok := entry["points"].(string)
 	require.True(t, ok)
 
-	decoded := decodePolylinePoints(t, points_str)
+	decoded := decodePolylinePoints(t, pointsStr)
 	require.Len(t, decoded, 6)
 
-	assert.InDelta(t, 38.56173, decoded[0][0], 0.0001)
-	assert.InDelta(t, 38.56205, decoded[1][0], 0.0001)
-	assert.InDelta(t, 38.56211, decoded[2][0], 0.0001)
-	assert.InDelta(t, 38.56210, decoded[3][0], 0.0001)
-	assert.InDelta(t, 38.56200, decoded[4][0], 0.0001)
-	assert.InDelta(t, 38.55997, decoded[5][0], 0.0001)
+	tolerance := 0.00001
+
+	// Latitude is sufficient to verify coords sequence order.
+	assert.InDelta(t, 38.56173, decoded[0][0], tolerance)
+	assert.InDelta(t, 38.56205, decoded[1][0], tolerance)
+	assert.InDelta(t, 38.56211, decoded[2][0], tolerance)
+	assert.InDelta(t, 38.56210, decoded[3][0], tolerance)
+	assert.InDelta(t, 38.56200, decoded[4][0], tolerance)
+	assert.InDelta(t, 38.55997, decoded[5][0], tolerance)
 }

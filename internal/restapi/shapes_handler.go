@@ -50,7 +50,6 @@ func (api *RestAPI) shapesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	lineCoords := make([][]float64, 0, len(shapes))
-	var totalPoints int
 
 	for i, point := range shapes {
 		// Filter consecutive duplicate points to avoid zero-length segments
@@ -58,14 +57,13 @@ func (api *RestAPI) shapesHandler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		lineCoords = append(lineCoords, []float64{point.Lat, point.Lon})
-		totalPoints++
 	}
 
 	// Encode as a single continuous polyline to ensure valid delta offsets
 	encodedPoints := string(polyline.EncodeCoords(lineCoords))
 
 	shapeEntry := models.ShapeEntry{
-		Length: totalPoints,
+		Length: len(lineCoords),
 		Levels: "",
 		Points: encodedPoints,
 	}
