@@ -1,10 +1,10 @@
 package gtfs
 
 import (
+	"testing"
+
 	"github.com/OneBusAway/go-gtfs"
 	"github.com/stretchr/testify/assert"
-	"maglev.onebusaway.org/internal/models"
-	"testing"
 )
 
 func TestGetRegionBounds(t *testing.T) {
@@ -106,18 +106,15 @@ func TestGetRegionBounds(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gtfsConfig := Config{
-				GtfsURL:      models.GetFixturePath(t, "raba.zip"),
-				GTFSDataPath: ":memory:",
-			}
-			manager, err := InitGTFSManager(gtfsConfig)
+			bounds := ComputeRegionBounds(tc.shapes)
 
-			// Set custom shapes
-			manager.gtfsData.Shapes = tc.shapes
-			if err != nil {
-				t.Fatalf("Failed to initialize GTFS manager: %v", err)
+			var lat, lon, latSpan, lonSpan float64
+			if bounds != nil {
+				lat = bounds.Lat
+				lon = bounds.Lon
+				latSpan = bounds.LatSpan
+				lonSpan = bounds.LonSpan
 			}
-			lat, lon, latSpan, lonSpan := manager.GetRegionBounds()
 
 			if tc.name == "No Shapes" || tc.name == "Shape With No Points" {
 				t.Logf("Test case %s returned: lat=%f, lon=%f, latSpan=%f, lonSpan=%f",
