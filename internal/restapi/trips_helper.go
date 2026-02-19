@@ -2,7 +2,9 @@ package restapi
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"log/slog"
 	"math"
 	"sort"
 	"time"
@@ -814,6 +816,11 @@ func (api *RestAPI) GetSituationIDsForTrip(ctx context.Context, tripID string) [
 			if err == nil {
 				agencyID = route.AgencyID
 			}
+		} else if err != sql.ErrNoRows {
+			slog.WarnContext(ctx, "Failed to fetch trip data for alerts; degrading to trip-only matching",
+				slog.String("trip_id", tripID),
+				slog.Any("error", err),
+			)
 		}
 	}
 
