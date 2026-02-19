@@ -41,11 +41,14 @@ func NewRequestLoggingMiddleware(logger *slog.Logger) func(http.Handler) http.Ha
 			// Log the request
 			duration := time.Since(start)
 
+			reqID, _ := r.Context().Value(RequestIDKey).(string)
+
 			logging.LogHTTPRequest(logger,
 				r.Method,
-				r.URL.Path, // Path without query parameters
+				r.URL.Path,
 				wrapped.statusCode,
-				float64(duration.Nanoseconds())/1e6, // Convert to milliseconds
+				float64(duration.Nanoseconds())/1e6,
+				slog.String("request_id", reqID),
 				slog.String("user_agent", r.Header.Get("User-Agent")),
 				slog.String("component", "http_server"))
 		})

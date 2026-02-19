@@ -14,3 +14,4 @@ config.docker.json
 tmp/
 *.log
 .DS_Store
+/api

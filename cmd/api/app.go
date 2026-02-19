@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"maglev.onebusaway.org/internal/app"
 	"maglev.onebusaway.org/internal/appconf"
 	"maglev.onebusaway.org/internal/clock"
@@ -118,7 +117,8 @@ func CreateServer(coreApp *app.Application, cfg appconf.Config) (*http.Server, *
 	// Add request logging middleware (outermost)
 	requestLogger := logging.NewStructuredLogger(os.Stdout, slog.LevelInfo)
 	requestLogMiddleware := restapi.NewRequestLoggingMiddleware(requestLogger)
-	handler := requestLogMiddleware(metricsHandler)
+
+	handler := restapi.RequestIDMiddleware(requestLogMiddleware(metricsHandler))
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Port),
