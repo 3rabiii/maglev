@@ -518,6 +518,18 @@ FROM
 WHERE
     stop_times.stop_id IN (sqlc.slice('stop_ids'));
 
+-- name: GetActiveRouteIDsForStopsOnDate :many
+SELECT DISTINCT
+    routes.agency_id || '_' || routes.id AS route_id,
+    stop_times.stop_id
+FROM
+    stop_times
+    JOIN trips ON stop_times.trip_id = trips.id
+    JOIN routes ON trips.route_id = routes.id
+WHERE
+    stop_times.stop_id IN (sqlc.slice('stop_ids'))
+    AND trips.service_id IN (sqlc.slice('service_ids'));
+
 -- name: GetAgenciesForStops :many
 SELECT DISTINCT
     a.id,

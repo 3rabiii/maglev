@@ -121,11 +121,25 @@ func (api *RestAPI) stopsForLocationHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Batch query to get route IDs for all stops
-	routeIDsForStops, err := api.GtfsManager.GtfsDB.Queries.GetRouteIDsForStops(ctx, stopIDs)
+	// Get active service IDs for the requested queryTime
+	currentDate := queryTime.Format("20060102")
+	activeServiceIDs, err := api.GtfsManager.GtfsDB.Queries.GetActiveServiceIDsForDate(ctx, currentDate)
 	if err != nil {
 		api.serverErrorResponse(w, r, err)
 		return
+	}
+
+	// Batch query to get route IDs for all stops, strictly filtered by active service IDs
+	var routeIDsForStops []gtfsdb.GetActiveRouteIDsForStopsOnDateRow
+	if len(activeServiceIDs) > 0 {
+		routeIDsForStops, err = api.GtfsManager.GtfsDB.Queries.GetActiveRouteIDsForStopsOnDate(ctx, gtfsdb.GetActiveRouteIDsForStopsOnDateParams{
+			StopIds:    stopIDs,
+			ServiceIds: activeServiceIDs,
+		})
+		if err != nil {
+			api.serverErrorResponse(w, r, err)
+			return
+		}
 	}
 
 	// Batch query to get agencies for all stops
@@ -174,9 +188,9 @@ func (api *RestAPI) stopsForLocationHandler(w http.ResponseWriter, r *http.Reque
 			continue
 		}
 
-		direction := models.UnknownValue
-		if stop.Direction.Valid && stop.Direction.String != "" {
-			direction = stop.Direction.String
+		direction := stop.Direction.String
+		if !stop.Direction.Valid || direction == "" || direction == models.UnknownValue {
+			direction = api.GtfsManager.GetDirectionForStop(ctx, stop.ID)
 		}
 
 		results = append(results, models.NewStop(

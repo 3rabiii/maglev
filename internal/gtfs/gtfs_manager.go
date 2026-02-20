@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -541,4 +542,74 @@ func (manager *Manager) MarkUnhealthy() {
 	manager.staticMutex.Lock()
 	defer manager.staticMutex.Unlock()
 	manager.isHealthy = false
+}
+
+// GetDirectionForStop calculates the primary direction of travel for a stop
+func (manager *Manager) GetDirectionForStop(ctx context.Context, stopID string) string {
+	contexts, err := manager.GtfsDB.Queries.GetStopsWithTripContext(ctx, stopID)
+	if err != nil || len(contexts) == 0 {
+		return "unknown"
+	}
+
+	var totalLatDiff, totalLonDiff float64
+	count := 0
+
+	for _, stopCtx := range contexts {
+		nextStop, err := manager.GtfsDB.Queries.GetNextStopInTrip(ctx, gtfsdb.GetNextStopInTripParams{
+			TripID:       stopCtx.TripID,
+			StopSequence: stopCtx.StopSequence,
+		})
+		if err != nil {
+			continue
+		}
+
+		totalLatDiff += (nextStop.Lat - stopCtx.Lat)
+		totalLonDiff += (nextStop.Lon - stopCtx.Lon)
+		count++
+	}
+
+	if count == 0 {
+		return "unknown"
+	}
+
+	return calculateCompassDirection(totalLatDiff/float64(count), totalLonDiff/float64(count))
+}
+
+// calculateCompassDirection converts lat/lon deltas into N, S, E, W, etc.
+func calculateCompassDirection(latDiff, lonDiff float64) string {
+	if latDiff == 0 && lonDiff == 0 {
+		return "unknown"
+	}
+
+	// Calculate angle in degrees using Atan2
+	// Atan2(y, x) returns the angle in radians
+	angle := math.Atan2(lonDiff, latDiff) * 180 / math.Pi
+
+	// Convert angle to 0-360 range
+	if angle < 0 {
+		angle += 360
+	}
+
+	// Determine cardinal direction
+	// 0/360 is North, 90 is East, 180 is South, 270 is West
+	switch {
+	case angle >= 337.5 || angle < 22.5:
+		return "N"
+	case angle >= 22.5 && angle < 67.5:
+		return "NE"
+	case angle >= 67.5 && angle < 112.5:
+		return "E"
+	case angle >= 112.5 && angle < 157.5:
+		return "SE"
+	case angle >= 157.5 && angle < 202.5:
+		return "S"
+	case angle >= 202.5 && angle < 247.5:
+		return "SW"
+	case angle >= 247.5 && angle < 292.5:
+		return "W"
+	case angle >= 292.5 && angle < 337.5:
+		return "NW"
+	default:
+		return "unknown"
+	}
 }

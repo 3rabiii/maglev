@@ -100,7 +100,11 @@ func TestStopsForLocationHandlerEndToEnd(t *testing.T) {
 }
 
 func TestStopsForLocationQuery(t *testing.T) {
-	_, resp, model := serveAndRetrieveEndpoint(t, "/api/where/stops-for-location.json?key=TEST&lat=40.583321&lon=-122.426966&query=2042")
+	// Stop 2042 only has trips on service c_2713_b_80332_d_56 (Thu/Fri/Sat, May 22 - Sep 6, 2025).
+	// Use a Friday within that range to ensure active service.
+	clock := clock.NewMockClock(time.Date(2025, 6, 13, 14, 0, 0, 0, time.UTC))
+	api := createTestApiWithClock(t, clock)
+	resp, model := serveApiAndRetrieveEndpoint(t, api, "/api/where/stops-for-location.json?key=TEST&lat=40.583321&lon=-122.426966&query=2042")
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -118,7 +122,9 @@ func TestStopsForLocationQuery(t *testing.T) {
 }
 
 func TestStopsForLocationLatSpanAndLonSpan(t *testing.T) {
-	_, resp, model := serveAndRetrieveEndpoint(t, "/api/where/stops-for-location.json?key=TEST&lat=40.583321&lon=-122.426966&latSpan=0.045&lonSpan=0.059")
+	clock := clock.NewMockClock(time.Date(2025, 12, 26, 14, 0, 0, 0, time.UTC))
+	api := createTestApiWithClock(t, clock)
+	resp, model := serveApiAndRetrieveEndpoint(t, api, "/api/where/stops-for-location.json?key=TEST&lat=40.583321&lon=-122.426966&latSpan=0.045&lonSpan=0.059")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	data, ok := model.Data.(map[string]interface{})
 	require.True(t, ok)
@@ -132,7 +138,9 @@ func TestStopsForLocationLatSpanAndLonSpan(t *testing.T) {
 }
 
 func TestStopsForLocationRadius(t *testing.T) {
-	_, resp, model := serveAndRetrieveEndpoint(t, "/api/where/stops-for-location.json?key=TEST&lat=40.583321&lon=-122.426966&radius=5000")
+	clock := clock.NewMockClock(time.Date(2025, 12, 26, 14, 0, 0, 0, time.UTC))
+	api := createTestApiWithClock(t, clock)
+	resp, model := serveApiAndRetrieveEndpoint(t, api, "/api/where/stops-for-location.json?key=TEST&lat=40.583321&lon=-122.426966&radius=5000")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	data, ok := model.Data.(map[string]interface{})
 	require.True(t, ok)
@@ -142,7 +150,9 @@ func TestStopsForLocationRadius(t *testing.T) {
 }
 
 func TestStopsForLocationLatAndLan(t *testing.T) {
-	_, resp, model := serveAndRetrieveEndpoint(t, "/api/where/stops-for-location.json?key=TEST&lat=40.583321&lon=-122.362535&radius=1000")
+	clock := clock.NewMockClock(time.Date(2025, 12, 26, 14, 0, 0, 0, time.UTC))
+	api := createTestApiWithClock(t, clock)
+	resp, model := serveApiAndRetrieveEndpoint(t, api, "/api/where/stops-for-location.json?key=TEST&lat=40.583321&lon=-122.362535&radius=1000")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	data, ok := model.Data.(map[string]interface{})
 	require.True(t, ok)
@@ -152,7 +162,9 @@ func TestStopsForLocationLatAndLan(t *testing.T) {
 }
 
 func TestStopsForLocationIsLimitExceeded(t *testing.T) {
-	_, resp, model := serveAndRetrieveEndpoint(t, "/api/where/stops-for-location.json?key=TEST&lat=40.583321&lon=-122.362535&radius=1000&maxCount=1")
+	clock := clock.NewMockClock(time.Date(2025, 12, 26, 14, 0, 0, 0, time.UTC))
+	api := createTestApiWithClock(t, clock)
+	resp, model := serveApiAndRetrieveEndpoint(t, api, "/api/where/stops-for-location.json?key=TEST&lat=40.583321&lon=-122.362535&radius=1000&maxCount=1")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	data, ok := model.Data.(map[string]interface{})
 	require.True(t, ok)
@@ -162,6 +174,26 @@ func TestStopsForLocationIsLimitExceeded(t *testing.T) {
 	isLimitExceeded, ok := data["limitExceeded"].(bool)
 	require.True(t, ok)
 	assert.True(t, isLimitExceeded)
+}
+
+func TestStopsForLocationActiveRoutesOnly(t *testing.T) {
+	futureClock := clock.NewMockClock(time.Date(2028, 1, 1, 12, 0, 0, 0, time.UTC))
+	api := createTestApiWithClock(t, futureClock)
+
+	resp, model := serveApiAndRetrieveEndpoint(t, api, "/api/where/stops-for-location.json?key=TEST&lat=40.583321&lon=-122.426966&radius=5000")
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	data, ok := model.Data.(map[string]interface{})
+	require.True(t, ok, "Expected data to be a map")
+
+	listRaw := data["list"]
+	if listRaw == nil {
+		assert.Nil(t, listRaw)
+	} else {
+		list, ok := listRaw.([]interface{})
+		require.True(t, ok, "Expected list to be an array")
+		assert.Empty(t, list, "Should return empty stops when no routes are active on the requested date")
+	}
 }
 
 func TestStopsForLocationHandlerValidatesParameters(t *testing.T) {
