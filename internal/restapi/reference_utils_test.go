@@ -260,6 +260,8 @@ func TestBuildStopReferencesAndRouteIDsForStops_DeduplicatesStopIDs(t *testing.T
 	assert.Len(t, stops, len(stopIDs), "duplicate stop IDs should be collapsed")
 }
 
+// TestBuildRouteReferences_Empty verifies that passing no stops returns an empty,
+// non-nil slice without touching the database.
 func TestBuildRouteReferences_Empty(t *testing.T) {
 	api := createTestApi(t)
 	routes, err := api.BuildRouteReferences(context.Background(), "25", []models.Stop{})
@@ -268,6 +270,8 @@ func TestBuildRouteReferences_Empty(t *testing.T) {
 	assert.NotNil(t, routes, "should return a non-nil empty slice")
 }
 
+// TestBuildRouteReferences_ContextCancellation verifies that a cancelled context
+// causes BuildRouteReferences to return immediately with context.Canceled.
 func TestBuildRouteReferences_ContextCancellation(t *testing.T) {
 	api := createTestApi(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -285,6 +289,11 @@ func TestBuildRouteReferences_ContextCancellation(t *testing.T) {
 	assert.True(t, errors.Is(err, context.Canceled))
 }
 
+// TestBuildRouteReferences_MultiAgencyScopingAndCollision exercises the agency
+// filtering introduced in BuildRouteReferences: only routes whose combined ID
+// (agency_routeID) matches a referenced stop are returned, each carrying its
+// own agency. It also covers the fallback branch for route IDs without an
+// underscore (the ExtractAgencyIDAndCodeID error path).
 func TestBuildRouteReferences_MultiAgencyScopingAndCollision(t *testing.T) {
 	// Build a multi-agency fixture where Agency "A1" has routes r100, r200
 	// and Agency "A2" has routes r300, r400.
@@ -385,8 +394,7 @@ func TestBuildRouteReferences_MultiAgencyScopingAndCollision(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, routes, 1)
 		// Expected: A1_r999 because buildRouteModels prepends agencyID for routes
+		// without an underscore (the ExtractAgencyIDAndCodeID fallback path).
 		assert.Equal(t, "A1_r999", routes[0].ID)
 	})
-
 }
-

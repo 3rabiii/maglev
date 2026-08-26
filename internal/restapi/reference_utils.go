@@ -24,6 +24,10 @@ func buildAgencyReferences(agencies []gtfsdb.Agency) []models.AgencyReference {
 	return refs
 }
 
+// BuildRouteReferences resolves the route references for the given stops,
+// scoped to the requested agency. Only routes whose combined ID matches one
+// of the stop's StaticRouteIDs are returned, each carrying its own agency
+// rather than being overwritten with the caller's.
 func (api *RestAPI) BuildRouteReferences(ctx context.Context, agencyID string, stops []models.Stop) ([]models.Route, error) {
 	routeIDSet := make(map[string]bool)
 	expectedCombinedIDs := make(map[string]bool)
