@@ -1,4 +1,4 @@
-# Source: https://github.com/OneBusAway/sdk-config/blob/main/openapi.yml
+# Source: https://github.com/OneBusAway/sdk-config/blob/main/stainless/openapi.yml
 # Fetched: 2026-07-13
 openapi: 3.0.0
 info:

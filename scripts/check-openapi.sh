@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-UPSTREAM_URL="https://raw.githubusercontent.com/OneBusAway/sdk-config/main/openapi.yml"
+UPSTREAM_URL="https://raw.githubusercontent.com/OneBusAway/sdk-config/main/stainless/openapi.yml"
 LOCAL="testdata/openapi.yml"
 TMP="$(mktemp /tmp/openapi.XXXXXX.yml)"
 
