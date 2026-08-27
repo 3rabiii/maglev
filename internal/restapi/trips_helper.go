@@ -435,6 +435,8 @@ func (api *RestAPI) fetchFrequenciesForTrips(ctx context.Context, tripIDs []stri
 	return freqMap, nil
 }
 
+// BuildTripSchedule returns the trip's schedule (stop times, block
+// neighbors, frequency) resolved around serviceDate in the agency's timezone.
 func (api *RestAPI) BuildTripSchedule(ctx context.Context, agencyID string, serviceDate time.Time, trip *gtfsdb.Trip, loc *time.Location) (*models.Schedule, error) {
 	stopTimes, err := api.GtfsManager.GtfsDB.Queries.GetStopTimesForTrip(ctx, trip.ID)
 	if err != nil {
