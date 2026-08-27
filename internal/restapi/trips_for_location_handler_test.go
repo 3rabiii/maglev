@@ -996,7 +996,8 @@ func TestTripsForLocationHandler_CandidateStopsAreNotCapped(t *testing.T) {
 
 		tripID := vehicle.Trip.ID.ID
 		stopTimes, err := api.GtfsManager.GtfsDB.Queries.GetStopTimesForTrip(ctx, tripID)
-		if err != nil || len(stopTimes) == 0 {
+		require.NoError(t, err)
+		if len(stopTimes) == 0 {
 			continue
 		}
 
