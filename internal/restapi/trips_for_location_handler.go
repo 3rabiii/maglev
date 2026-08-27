@@ -66,7 +66,7 @@ func (api *RestAPI) tripsForLocationHandler(w http.ResponseWriter, r *http.Reque
 		}
 		positionedTripIDs[vehicle.Trip.ID.ID] = struct{}{}
 		vLat, vLon := float64(*vehicle.Position.Latitude), float64(*vehicle.Position.Longitude)
-		if boundsContain(bounds, vLat, vLon) {
+		if utils.BoundsContain(bounds, vLat, vLon) {
 			visibleTripIDs = append(visibleTripIDs, vehicle.Trip.ID.ID)
 		}
 	}
@@ -244,11 +244,6 @@ func mergeFieldErrors(dst, src map[string][]string) map[string][]string {
 	return dst
 }
 
-func boundsContain(bounds utils.CoordinateBounds, lat, lon float64) bool {
-	return lat >= bounds.MinLat && lat <= bounds.MaxLat &&
-		lon >= bounds.MinLon && lon <= bounds.MaxLon
-}
-
 // scheduledTripIDsInBounds returns trips that serve an in-bounds stop, are in
 // service at currentTime, and whose schedule-derived position falls inside the
 // search box.
@@ -297,7 +292,7 @@ func (api *RestAPI) scheduledTripIDsInBounds(
 	visible := make([]string, 0, len(trips))
 	for _, trip := range trips {
 		if ctx.Err() != nil {
-			return visible, nil
+			return nil, ctx.Err()
 		}
 		if !trip.ShapeID.Valid {
 			continue
@@ -310,7 +305,7 @@ func (api *RestAPI) scheduledTripIDsInBounds(
 			currentTime,
 			serviceDates.Resolve(trip),
 		)
-		if position != nil && boundsContain(bounds, position.Lat, position.Lon) {
+		if position != nil && utils.BoundsContain(bounds, position.Lat, position.Lon) {
 			visible = append(visible, trip.ID)
 		}
 	}
