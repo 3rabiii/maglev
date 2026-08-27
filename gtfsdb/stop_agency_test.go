@@ -182,6 +182,64 @@ func TestBackfillStopAgencyIndex_RebuildsLegacySingleColumnPK(t *testing.T) {
 	assert.Equal(t, 2, pkColumns, "rebuild should leave the table with the composite primary key")
 }
 
+func TestBackfillStopAgencyIndex_RollsBackOnFailure(t *testing.T) {
+	client := newTestClientWithRABA(t)
+	ctx := context.Background()
+
+	var before []struct{ stopID, agencyID string }
+	rows, err := client.DB.QueryContext(ctx, "SELECT stop_id, agency_id FROM stop_agencies ORDER BY stop_id, agency_id")
+	require.NoError(t, err)
+	for rows.Next() {
+		var r struct{ stopID, agencyID string }
+		require.NoError(t, rows.Scan(&r.stopID, &r.agencyID))
+		before = append(before, r)
+	}
+	require.NoError(t, rows.Err())
+	require.NotEmpty(t, before)
+
+	// Stand in for a database created under the pre-composite-key schema, so the backfill
+	// takes the transactional recreate-and-rebuild path rather than skipping outright.
+	_, err = client.DB.ExecContext(ctx, `
+		DROP TABLE stop_agencies;
+		CREATE TABLE stop_agencies (
+			stop_id TEXT PRIMARY KEY,
+			agency_id TEXT NOT NULL
+		);
+	`)
+	require.NoError(t, err)
+	_, err = client.DB.ExecContext(ctx, `
+		INSERT INTO stop_agencies (stop_id, agency_id)
+		SELECT DISTINCT stop_id, (SELECT id FROM agencies LIMIT 1) FROM stop_times
+	`)
+	require.NoError(t, err)
+
+	// Point one route at an agency that does not exist, with FK checks off just long
+	// enough to create the dangling reference. BuildStopAgencies then tries to insert a
+	// stop_agencies row for that agency, which fails its own FK check mid-rebuild.
+	_, err = client.DB.ExecContext(ctx, "PRAGMA foreign_keys = OFF")
+	require.NoError(t, err)
+	_, err = client.DB.ExecContext(ctx, "UPDATE routes SET agency_id = 'no-such-agency' WHERE id = (SELECT id FROM routes LIMIT 1)")
+	require.NoError(t, err)
+	_, err = client.DB.ExecContext(ctx, "PRAGMA foreign_keys = ON")
+	require.NoError(t, err)
+
+	err = client.backfillStopAgencyIndex(ctx)
+	require.Error(t, err, "a foreign key violation mid-rebuild should surface, not be swallowed")
+
+	var pkColumns int
+	err = client.DB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('stop_agencies') WHERE pk > 0`,
+	).Scan(&pkColumns)
+	require.NoError(t, err)
+	assert.Equal(t, 1, pkColumns,
+		"a rolled-back transaction should leave the legacy table exactly as the DROP found it, not half-recreated")
+
+	var count int
+	require.NoError(t, client.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM stop_agencies").Scan(&count))
+	assert.Equal(t, len(before), count,
+		"a rolled-back transaction should leave the legacy table's row count untouched")
+}
+
 func TestBackfillStopAgencyIndex_SkipsEmptyFeed(t *testing.T) {
 	client, err := NewClient(Config{DBPath: ":memory:", Env: appconf.Test})
 	require.NoError(t, err)
