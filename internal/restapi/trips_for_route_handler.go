@@ -345,14 +345,11 @@ func (api *RestAPI) tripsForRouteHandler(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	services := serviceIDsByDay{
-		QueryDay:    serviceIDs,
-		PreviousDay: prevServiceIDs,
-	}
 	serviceDatesByAgency := make(map[string]*serviceDateResolver, len(agencyLocations))
 	for agencyID, loc := range agencyLocations {
 		queryDayMidnight := serviceDateMidnight(currentTime, loc)
-		serviceDatesByAgency[agencyID] = newServiceDateResolverFor(queryDayMidnight, currentTime, services)
+		days := api.serviceIDsForDays(ctx, queryDayMidnight)
+		serviceDatesByAgency[agencyID] = newServiceDateResolverFor(queryDayMidnight, currentTime, days)
 	}
 	stopIDsMap := make(map[string]string)
 
