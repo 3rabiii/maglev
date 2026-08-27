@@ -73,12 +73,6 @@ func (api *RestAPI) tripsForRouteHandler(w http.ResponseWriter, r *http.Request)
 	// Check the previous day's service for trips running past midnight.
 	// GTFS allows departure times > 24:00:00 (e.g., 25:30:00 = 1:30 AM next day).
 	// These trips belong to yesterday's service but are still active now.
-	// TODO: We should add config for runningLateWindow and runningEarlyWindow like Java OBA
-	// source:https://groups.google.com/g/onebusaway-developers/c/j-G-1UyfbXI/m/J-Su3BArKW0J
-	const (
-		runningLate  = 30 * time.Minute // runningLateWindow
-		runningEarly = 10 * time.Minute // runningEarlyWindow
-	)
 	prevDay := currentTime.AddDate(0, 0, -1)
 	prevFormattedDate := prevDay.Format("20060102")
 	prevServiceIDs, err := api.GtfsManager.GtfsDB.Queries.GetActiveServiceIDsForDate(ctx, prevFormattedDate)
@@ -351,6 +345,15 @@ func (api *RestAPI) tripsForRouteHandler(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	services := serviceIDsByDay{
+		QueryDay:    serviceIDs,
+		PreviousDay: prevServiceIDs,
+	}
+	serviceDatesByAgency := make(map[string]*serviceDateResolver, len(agencyLocations))
+	for agencyID, loc := range agencyLocations {
+		queryDayMidnight := serviceDateMidnight(currentTime, loc)
+		serviceDatesByAgency[agencyID] = newServiceDateResolverFor(queryDayMidnight, currentTime, services)
+	}
 	stopIDsMap := make(map[string]string)
 
 	// Batch-fetch frequencies; success seeds nil to skip fallback queries.
@@ -434,11 +437,7 @@ func (api *RestAPI) tripsForRouteHandler(w http.ResponseWriter, r *http.Request)
 		// trip. Per spec, schedule.stopTimes is "scheduled stop times for this
 		// trip" and schedule.previousTripId is "the preceding trip in this
 		// vehicle's block" — both relative to the entry's trip identity.
-		activeLocation := currentLocation
-		if loc, ok := agencyLocations[activeAgencyID]; ok {
-			activeLocation = loc
-		}
-		activeMidnight := tripServiceDayMidnight(currentTime, &fetchedTrip, activeLocation, serviceIDs, prevServiceIDs)
+		activeMidnight := serviceDatesByAgency[activeAgencyID].Resolve(fetchedTrip)
 
 		entryLocation := currentLocation
 		if loc, ok := agencyLocations[entryAgencyID]; ok {
@@ -446,7 +445,7 @@ func (api *RestAPI) tripsForRouteHandler(w http.ResponseWriter, r *http.Request)
 		}
 		entryMidnight := serviceDateMidnight(currentTime, entryLocation)
 		if entryTrip, ok := tripsByID[entryTripID]; ok {
-			entryMidnight = tripServiceDayMidnight(currentTime, &entryTrip, entryLocation, serviceIDs, prevServiceIDs)
+			entryMidnight = serviceDatesByAgency[entryAgencyID].Resolve(entryTrip)
 		}
 
 		var schedule *models.TripsSchedule
@@ -507,27 +506,14 @@ func (api *RestAPI) tripsForRouteHandler(w http.ResponseWriter, r *http.Request)
 		}
 		dupTripID := vehicle.Trip.ID.ID
 
-		// Resolve the base trip ID for DB lookups.
-		// Try the full ID first; if not found, strip a trailing numeric suffix
-		// (e.g., ".00060") that some feeds append to distinguish duplicated runs.
-		baseTripID := dupTripID
-		baseTrip, baseTripErr := api.GtfsManager.GtfsDB.Queries.GetTrip(ctx, dupTripID)
-		if baseTripErr != nil {
-			if !errors.Is(baseTripErr, sql.ErrNoRows) {
-				api.Logger.Warn("trips-for-route: failed to resolve DUPLICATED trip ID",
-					"dup_trip_id", dupTripID, "error", baseTripErr)
-			}
-			stripped := stripNumericSuffix(dupTripID)
-			if stripped != dupTripID {
-				baseTripID = stripped
-				baseTrip, baseTripErr = api.GtfsManager.GtfsDB.Queries.GetTrip(ctx, baseTripID)
-			}
-		}
+		baseTripID, baseTrip := api.resolveDuplicatedBaseTrip(ctx, dupTripID)
+		// A DUPLICATED trip with no static counterpart leaves baseTrip zeroed,
+		// which the resolver reports as the query day.
 
 		// Index the base trip before the situation lookup below: an unindexed
 		// trip sends tripSituationRefs back to the database for the record
 		// already in hand, the same reuse the interlined path above relies on.
-		if baseTripErr == nil {
+		if baseTrip.ID != "" {
 			tripsByID[baseTrip.ID] = baseTrip
 			if !filteredRouteTrips[baseTripID] {
 				fetchedTrips = append(fetchedTrips, baseTrip)
@@ -540,8 +526,8 @@ func (api *RestAPI) tripsForRouteHandler(w http.ResponseWriter, r *http.Request)
 			dupLocation = loc
 		}
 		dupMidnight := serviceDateMidnight(currentTime, dupLocation)
-		if baseTripErr == nil {
-			dupMidnight = tripServiceDayMidnight(currentTime, &baseTrip, dupLocation, serviceIDs, prevServiceIDs)
+		if resolver, ok := serviceDatesByAgency[agencyID]; ok {
+			dupMidnight = resolver.Resolve(baseTrip)
 		}
 
 		var schedule *models.TripsSchedule
@@ -1066,6 +1052,42 @@ func newTripReference(trip gtfsdb.Trip) models.Trip {
 		BlockID:       trip.BlockID.String,
 		ShapeID:       trip.ShapeID.String,
 	}
+}
+
+// resolveDuplicatedBaseTrip finds the static trip a DUPLICATED real-time trip
+// is a run of, returning the ID to use for schedule and status lookups together
+// with the trip row itself.
+//
+// The full ID is tried first, then the ID with a trailing numeric suffix
+// stripped, which is how some feeds distinguish duplicated runs. The stripped
+// ID is adopted only once it resolves: handing on an ID that matches no trip is
+// worse than keeping the unresolvable one the feed sent. When neither resolves,
+// the trip comes back zeroed, which the service date resolver reports as the
+// query day.
+func (api *RestAPI) resolveDuplicatedBaseTrip(ctx context.Context, dupTripID string) (string, gtfsdb.Trip) {
+	trip, err := api.GtfsManager.GtfsDB.Queries.GetTrip(ctx, dupTripID)
+	if err == nil {
+		return dupTripID, trip
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		api.Logger.Warn("trips-for-route: failed to resolve DUPLICATED trip ID",
+			"dup_trip_id", dupTripID, "error", err)
+	}
+
+	stripped := stripNumericSuffix(dupTripID)
+	if stripped == dupTripID {
+		return dupTripID, gtfsdb.Trip{}
+	}
+
+	strippedTrip, strippedErr := api.GtfsManager.GtfsDB.Queries.GetTrip(ctx, stripped)
+	if strippedErr != nil {
+		if !errors.Is(strippedErr, sql.ErrNoRows) {
+			api.Logger.Warn("trips-for-route: failed to resolve stripped DUPLICATED trip ID",
+				"dup_trip_id", dupTripID, "stripped_trip_id", stripped, "error", strippedErr)
+		}
+		return dupTripID, gtfsdb.Trip{}
+	}
+	return stripped, strippedTrip
 }
 
 // stripNumericSuffix removes a trailing ".<digits>" from a trip ID.
