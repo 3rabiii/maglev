@@ -455,6 +455,7 @@ func TestSearchStopsHandlerParentStationReferences(t *testing.T) {
 	ctx := context.Background()
 
 	registerFixtureCleanup(t, api.GtfsManager.GtfsDB.DB,
+		clearIndexedStopAgencies(`'child_stop_1', 'parent_stat_1', 'child_stop_2', 'parent_stat_2', 'child_stop_shared', 'child_stop_multi_agency'`),
 		`DELETE FROM stop_times WHERE trip_id IN ('trip_parent_test', 'trip_parent_test_2', 'trip_parent_only', 'trip_multi_agency')`,
 		`DELETE FROM trips WHERE id IN ('trip_parent_test', 'trip_parent_test_2', 'trip_parent_only', 'trip_multi_agency')`,
 		`DELETE FROM routes WHERE id IN ('route_parent_test', 'route_parent_test_2', 'route_parent_only')`,
@@ -591,6 +592,8 @@ func TestSearchStopsHandlerParentStationReferences(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
+	rebuildStopAgencyIndex(t, api)
+
 	resp, stopsResp := callAPIHandler[StopsResponse](t, api, searchStopsURL(url.Values{"input": {"Child Stop"}}))
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, http.StatusOK, stopsResp.Code)
@@ -598,8 +601,14 @@ func TestSearchStopsHandlerParentStationReferences(t *testing.T) {
 	require.Len(t, stopsResp.Data.List, 4)
 
 	stopsByName := make(map[string]models.Stop, len(stopsResp.Data.List))
+	seenIDs := make(map[string]bool, len(stopsResp.Data.List))
 	for _, stop := range stopsResp.Data.List {
 		stopsByName[stop.Name] = stop
+		// child_stop_multi_agency is served by both 888 and 999: stop_agencies holds one
+		// row per (stop, agency) pair, so joining it without collapsing to a single agency
+		// would return this stop twice.
+		assert.False(t, seenIDs[stop.ID], "stop %q appeared more than once in the result list", stop.ID)
+		seenIDs[stop.ID] = true
 	}
 
 	child1, ok := stopsByName["Child Stop One"]
