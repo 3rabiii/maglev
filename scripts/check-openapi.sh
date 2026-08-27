@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 UPSTREAM_URL="https://raw.githubusercontent.com/OneBusAway/sdk-config/main/stainless/openapi.yml"
-LOCAL="testdata/openapi.yml"
+LOCAL="$REPO_ROOT/testdata/openapi.yml"
 TMP="$(mktemp /tmp/openapi.XXXXXX.yml)"
 
 cleanup() { rm -f "$TMP"; }
