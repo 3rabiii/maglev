@@ -93,7 +93,7 @@ func (api *RestAPI) tripsForLocationHandler(w http.ResponseWriter, r *http.Reque
 
 	var routes []gtfsdb.Route
 	if len(routeIDs) > 0 {
-		routes, err = api.GtfsManager.GtfsDB.Queries.GetRoutesByIDs(ctx, routeIDs)
+		routes, err = queryInBatches(ctx, routeIDs, api.GtfsManager.GtfsDB.Queries.GetRoutesByIDs)
 		if err != nil {
 			api.serverErrorResponse(w, r, err)
 			return
