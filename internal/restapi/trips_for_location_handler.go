@@ -359,7 +359,12 @@ func (api *RestAPI) inServiceTripIDs(
 
 		windowStart := day.sinceMidnightNs - int64(runningLate)
 		windowEnd := day.sinceMidnightNs + int64(runningEarly)
-		tripIDs, err := queryInBatches(ctx, stopIDs, func(ctx context.Context, batch []string) ([]string, error) {
+		// Reserve room for the two window scalars and the ServiceIds slice this
+		// statement also binds — queryInBatches alone would size the StopIds
+		// batch as if it were the only bind, and a day with enough active
+		// service IDs could still push the statement over the limit.
+		reserved := len(day.serviceIDs) + 2
+		tripIDs, err := queryInBatchesReserving(ctx, stopIDs, reserved, func(ctx context.Context, batch []string) ([]string, error) {
 			return api.GtfsManager.GtfsDB.Queries.GetInServiceTripIDsForStops(ctx, gtfsdb.GetInServiceTripIDsForStopsParams{
 				StopIds:     batch,
 				ServiceIds:  day.serviceIDs,
