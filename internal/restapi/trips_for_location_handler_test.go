@@ -1282,3 +1282,92 @@ func TestTripsForLocationHandler_ScheduledTripsHonorTimeParameter(t *testing.T) 
 	assert.Less(t, len(night.Data.List), len(midday.Data.List),
 		"fewer trips run at 3am than at midday, so time must drive selection")
 }
+
+// TestTripsForLocationHandler_ResolvesCandidatesPerAgencyZone verifies that
+// candidate selection resolves each agency's own time zone rather than only
+// the first configured agency's. It injects a second agency in a zone far
+// from RABA's own America/Los_Angeles, with a trip scheduled for the last ten
+// minutes of that agency's previous service day. At the chosen instant,
+// RABA's own zone reads mid-morning (nowhere near a service-day boundary),
+// while the injected agency's zone has just passed midnight — so the trip is
+// only discoverable by resolving candidates in its own zone.
+func TestTripsForLocationHandler_ResolvesCandidatesPerAgencyZone(t *testing.T) {
+	api := createTestApi(t)
+	defer api.Shutdown()
+	ctx := context.Background()
+	db := api.GtfsManager.GtfsDB.DB
+
+	// Pacific/Auckland does not observe DST in June (Southern winter), so it
+	// is a fixed UTC+12 here: 2025-06-11 12:05 UTC is 2025-06-11 05:05 in Los
+	// Angeles (PDT, UTC-7) and 2025-06-12 00:05 in Auckland.
+	currentTime := time.Date(2025, 6, 11, 12, 5, 0, 0, time.UTC)
+
+	// Reuse a real trip's shape+stop pairing, same technique as
+	// seedShapedAndShapelessTrips: an arbitrary shape/stop pairing can project
+	// outside the search box even though both individually sit inside it.
+	var stopID string
+	var shapeID sql.NullString
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT st.stop_id, t.shape_id FROM trips t JOIN stop_times st ON st.trip_id = t.id
+		 WHERE t.shape_id IS NOT NULL LIMIT 1`).Scan(&stopID, &shapeID))
+	require.True(t, shapeID.Valid, "the fixture must have at least one shaped trip")
+
+	const (
+		nzAgencyID  = "test-nz-agency"
+		nzRouteID   = "test-nz-route"
+		nzServiceID = "test-nz-daily-service"
+		nzTripID    = "test-nz-midnight-trip"
+	)
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM stop_times WHERE trip_id = ?`, nzTripID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM trips WHERE id = ?`, nzTripID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM routes WHERE id = ?`, nzRouteID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM calendar WHERE id = ?`, nzServiceID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM agencies WHERE id = ?`, nzAgencyID)
+	})
+
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO agencies (id, name, url, timezone) VALUES (?, 'NZ Test Agency', 'http://example.com', 'Pacific/Auckland')`,
+		nzAgencyID)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO routes (id, agency_id, short_name, type) VALUES (?, ?, 'NZ', 3)`,
+		nzRouteID, nzAgencyID)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO calendar (id, monday, tuesday, wednesday, thursday, friday, saturday, sunday, start_date, end_date)
+		 VALUES (?, 1, 1, 1, 1, 1, 1, 1, '20200101', '20991231')`,
+		nzServiceID)
+	require.NoError(t, err)
+
+	// 24:00:00-24:10:00 on the previous Auckland service day: the last ten
+	// minutes before the calendar rolls over, expressed as nanoseconds since
+	// that day's midnight (the storage convention CLAUDE.md documents).
+	minArrival := int64(24 * time.Hour)
+	maxDeparture := int64(24*time.Hour + 10*time.Minute)
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO trips (id, route_id, service_id, shape_id, min_arrival_time, max_departure_time)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		nzTripID, nzRouteID, nzServiceID, shapeID, minArrival, maxDeparture)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO stop_times (trip_id, arrival_time, departure_time, stop_id, stop_sequence)
+		 VALUES (?, ?, ?, ?, 0)`,
+		nzTripID, minArrival, maxDeparture, stopID)
+	require.NoError(t, err)
+
+	url := tripsForLocationURL(2.0, 3.0, fmt.Sprintf("time=%d", currentTime.UnixMilli()))
+	resp, model := callAPIHandler[TripsForLocationResponse](t, api, url)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	wantTripID := utils.FormCombinedID(nzAgencyID, nzTripID)
+	found := false
+	for _, entry := range model.Data.List {
+		if entry.TripId == wantTripID {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found,
+		"a trip near midnight in its own agency's zone must be discovered even though another agency's zone reads mid-morning")
+}

@@ -43,13 +43,12 @@ func (api *RestAPI) tripsForLocationHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Candidate selection runs before any trip's agency is known, so it resolves
-	// service days in the query's own zone. Each entry's reported service date is
-	// settled per agency once the entries are built.
-	queryZone := parsedReq.CurrentTime.Location()
-	queryDayMidnight := serviceDateMidnight(parsedReq.CurrentTime, queryZone)
-	serviceDates := newServiceDateResolverFor(queryDayMidnight, parsedReq.CurrentTime,
-		api.serviceIDsForDays(ctx, queryDayMidnight))
+	// Candidate selection runs before any trip's agency is known, so a trip's
+	// service day can't be resolved in its own agency's zone yet — resolve it in
+	// every configured agency's zone instead, since a trip near midnight is only
+	// in service under its own agency's day. Each entry's reported service date
+	// is settled per agency once the entries are built.
+	serviceDatesByZone := api.serviceDateResolversByZone(ctx, parsedReq.AgencyLocations, parsedReq.CurrentTime)
 	activeTrips := api.getActiveTrips(candidateTripIDs, api.GtfsManager.GetRealTimeVehicles())
 
 	bounds := internalgtfs.BoundsFromParams(parsedReq.LocationParams, true)
@@ -71,12 +70,24 @@ func (api *RestAPI) tripsForLocationHandler(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	scheduledTripIDs, err := api.scheduledTripIDsInBounds(ctx, stopIDs, bounds, serviceDates, parsedReq.CurrentTime, positionedTripIDs)
-	if err != nil {
-		api.serverErrorResponse(w, r, err)
-		return
+	scheduledTripIDSet := make(map[string]struct{})
+	for _, serviceDates := range serviceDatesByZone {
+		if ctx.Err() != nil {
+			api.clientCanceledResponse(w, r, ctx.Err())
+			return
+		}
+		zoneTripIDs, err := api.scheduledTripIDsInBounds(ctx, stopIDs, bounds, serviceDates, parsedReq.CurrentTime, positionedTripIDs)
+		if err != nil {
+			api.serverErrorResponse(w, r, err)
+			return
+		}
+		for _, tripID := range zoneTripIDs {
+			scheduledTripIDSet[tripID] = struct{}{}
+		}
 	}
-	visibleTripIDs = append(visibleTripIDs, scheduledTripIDs...)
+	for tripID := range scheduledTripIDSet {
+		visibleTripIDs = append(visibleTripIDs, tripID)
+	}
 
 	trips, err := queryInBatches(ctx, visibleTripIDs, api.GtfsManager.GtfsDB.Queries.GetTripsByIDs)
 	if err != nil {
@@ -700,6 +711,30 @@ type blockTripsKey struct {
 func serviceDateMidnight(currentTime time.Time, agencyLocation *time.Location) time.Time {
 	_, midnight := utils.ServiceDateMidnight(nil, currentTime.In(agencyLocation))
 	return midnight
+}
+
+// serviceDateResolversByZone builds one serviceDateResolver per distinct agency
+// time zone in locations. Candidate selection runs before any trip's agency is
+// known, so a candidate can't be resolved in its own agency's zone directly —
+// resolving in every configured zone instead means a trip near midnight is
+// still found under whichever zone actually has it in service. Almost every
+// deployment has a single zone, so this is one resolver in the common case.
+func (api *RestAPI) serviceDateResolversByZone(
+	ctx context.Context,
+	locations map[string]*time.Location,
+	currentTime time.Time,
+) map[string]*serviceDateResolver {
+	resolvers := make(map[string]*serviceDateResolver, len(locations))
+	for _, location := range locations {
+		zoneName := location.String()
+		if _, ok := resolvers[zoneName]; ok {
+			continue
+		}
+		queryDayMidnight := serviceDateMidnight(currentTime, location)
+		resolvers[zoneName] = newServiceDateResolverFor(queryDayMidnight, currentTime.In(location),
+			api.serviceIDsForDays(ctx, queryDayMidnight))
+	}
+	return resolvers
 }
 
 func (api *RestAPI) buildScheduleForTrip(
