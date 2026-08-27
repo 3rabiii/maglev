@@ -182,15 +182,13 @@ DELETE FROM stop_agencies WHERE TRUE;
 -- name: BuildStopAgencies :exec
 INSERT INTO
     stop_agencies (stop_id, agency_id)
-SELECT
+SELECT DISTINCT
     stop_times.stop_id,
-    MIN(routes.agency_id)
+    routes.agency_id
 FROM
     stop_times
     JOIN trips ON stop_times.trip_id = trips.id
-    JOIN routes ON trips.route_id = routes.id
-GROUP BY
-    stop_times.stop_id;
+    JOIN routes ON trips.route_id = routes.id;
 
 -- name: CreateCalendarDate :one
 INSERT
@@ -281,15 +279,12 @@ FROM
     stops;
 
 -- name: GetStopIDsForAgency :many
-SELECT DISTINCT
-    s.id
+SELECT
+    stop_id
 FROM
-    stops s
-    JOIN stop_times st ON s.id = st.stop_id
-    JOIN trips t ON st.trip_id = t.id
-    JOIN routes r ON t.route_id = r.id
+    stop_agencies
 WHERE
-    r.agency_id = ?;
+    agency_id = ?;
 
 -- name: GetTrip :one
 SELECT

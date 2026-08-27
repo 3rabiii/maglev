@@ -38,20 +38,84 @@ func TestBuildStopAgencyIndex_PopulatesTable(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, stray, "a stop no route serves should not be indexed")
 
-	// The indexed agency must be the lowest one serving the stop.
-	var mismatched int
+	// The index must hold exactly the (stop, agency) pairs the join produces - no more, no less.
+	sourcePairs := `
+		SELECT DISTINCT stop_times.stop_id, routes.agency_id
+		FROM stop_times
+		JOIN trips ON stop_times.trip_id = trips.id
+		JOIN routes ON trips.route_id = routes.id
+	`
+
+	var missingPairs int
 	err = client.DB.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM stop_agencies sa
-		WHERE sa.agency_id != (
-			SELECT MIN(routes.agency_id)
-			FROM stop_times
-			JOIN trips ON stop_times.trip_id = trips.id
-			JOIN routes ON trips.route_id = routes.id
-			WHERE stop_times.stop_id = sa.stop_id
+		SELECT COUNT(*) FROM (
+			`+sourcePairs+`
+			EXCEPT
+			SELECT stop_id, agency_id FROM stop_agencies
 		)
-	`).Scan(&mismatched)
+	`).Scan(&missingPairs)
 	require.NoError(t, err)
-	assert.Zero(t, mismatched, "indexed agency should be the lowest agency serving the stop")
+	assert.Zero(t, missingPairs, "every (stop, agency) pair from the join should be indexed")
+
+	var strayPairs int
+	err = client.DB.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM (
+			SELECT stop_id, agency_id FROM stop_agencies
+			EXCEPT
+			`+sourcePairs+`
+		)
+	`).Scan(&strayPairs)
+	require.NoError(t, err)
+	assert.Zero(t, strayPairs, "no indexed pair should be missing from the join")
+}
+
+func TestBuildStopAgencyIndex_KeepsEveryAgencyServingAStop(t *testing.T) {
+	client := newTestClientWithRABA(t)
+	ctx := context.Background()
+
+	var stopID string
+	require.NoError(t, client.DB.QueryRowContext(ctx, "SELECT stop_id FROM stop_agencies LIMIT 1").Scan(&stopID))
+
+	// Give the stop a second agency: a new agency, a route it owns, a trip on that route,
+	// and a stop_time at the same stop.
+	const secondAgencyID = "second-agency"
+	_, err := client.DB.ExecContext(ctx, `
+		INSERT INTO agencies (id, name, url, timezone) VALUES (?, 'Second Agency', 'http://example.com', 'UTC')
+	`, secondAgencyID)
+	require.NoError(t, err)
+
+	_, err = client.DB.ExecContext(ctx, `
+		INSERT INTO routes (id, agency_id, short_name, type) VALUES ('second-route', ?, 'S', 3)
+	`, secondAgencyID)
+	require.NoError(t, err)
+
+	_, err = client.DB.ExecContext(ctx, `
+		INSERT INTO trips (id, route_id, service_id) VALUES ('second-trip', 'second-route', (SELECT service_id FROM trips LIMIT 1))
+	`)
+	require.NoError(t, err)
+
+	_, err = client.DB.ExecContext(ctx, `
+		INSERT INTO stop_times (trip_id, stop_id, arrival_time, departure_time, stop_sequence)
+		VALUES ('second-trip', ?, 0, 0, 0)
+	`, stopID)
+	require.NoError(t, err)
+
+	require.NoError(t, buildStopAgencyIndex(ctx, client.Queries))
+
+	rows, err := client.DB.QueryContext(ctx, "SELECT agency_id FROM stop_agencies WHERE stop_id = ?", stopID)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var agencyIDs []string
+	for rows.Next() {
+		var agencyID string
+		require.NoError(t, rows.Scan(&agencyID))
+		agencyIDs = append(agencyIDs, agencyID)
+	}
+	require.NoError(t, rows.Err())
+
+	assert.GreaterOrEqual(t, len(agencyIDs), 2, "a stop served by two agencies should have two rows, not one collapsed row")
+	assert.Contains(t, agencyIDs, secondAgencyID)
 }
 
 func TestBackfillStopAgencyIndex_FillsEmptyIndex(t *testing.T) {

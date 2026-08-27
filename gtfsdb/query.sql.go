@@ -14,15 +14,13 @@ import (
 const buildStopAgencies = `-- name: BuildStopAgencies :exec
 INSERT INTO
     stop_agencies (stop_id, agency_id)
-SELECT
+SELECT DISTINCT
     stop_times.stop_id,
-    MIN(routes.agency_id)
+    routes.agency_id
 FROM
     stop_times
     JOIN trips ON stop_times.trip_id = trips.id
     JOIN routes ON trips.route_id = routes.id
-GROUP BY
-    stop_times.stop_id
 `
 
 func (q *Queries) BuildStopAgencies(ctx context.Context) error {
@@ -3693,15 +3691,12 @@ func (q *Queries) GetStopForAgency(ctx context.Context, arg GetStopForAgencyPara
 }
 
 const getStopIDsForAgency = `-- name: GetStopIDsForAgency :many
-SELECT DISTINCT
-    s.id
+SELECT
+    stop_id
 FROM
-    stops s
-    JOIN stop_times st ON s.id = st.stop_id
-    JOIN trips t ON st.trip_id = t.id
-    JOIN routes r ON t.route_id = r.id
+    stop_agencies
 WHERE
-    r.agency_id = ?
+    agency_id = ?
 `
 
 func (q *Queries) GetStopIDsForAgency(ctx context.Context, agencyID string) ([]string, error) {
@@ -3712,11 +3707,11 @@ func (q *Queries) GetStopIDsForAgency(ctx context.Context, agencyID string) ([]s
 	defer rows.Close()
 	var items []string
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var stop_id string
+		if err := rows.Scan(&stop_id); err != nil {
 			return nil, err
 		}
-		items = append(items, id)
+		items = append(items, stop_id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
