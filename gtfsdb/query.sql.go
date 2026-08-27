@@ -2178,24 +2178,29 @@ FROM
     JOIN stop_times st ON st.trip_id = t.id
 WHERE
     t.min_arrival_time <= ?1
-    AND t.max_departure_time >= ?1
+    AND t.max_departure_time >= ?2
     AND st.stop_id IN (/*SLICE:stop_ids*/?)
     AND t.service_id IN (/*SLICE:service_ids*/?)
 `
 
 type GetInServiceTripIDsForStopsParams struct {
-	SinceMidnight sql.NullInt64
-	StopIds       []string
-	ServiceIds    []string
+	WindowEnd   sql.NullInt64
+	WindowStart sql.NullInt64
+	StopIds     []string
+	ServiceIds  []string
 }
 
 // Trips that serve one of the given stops, run on one of the given services, and
-// whose scheduled span contains the given time-since-midnight. The caller passes
-// an offset past 24h to match trips belonging to the previous service day.
+// whose scheduled span overlaps [window_start, window_end] -- the same
+// runningLate/runningEarly grace window trips-for-route's runsOn applies, so a
+// trip that just ended or is about to start is still offered as a candidate.
+// The caller passes an offset past 24h to match trips belonging to the
+// previous service day.
 func (q *Queries) GetInServiceTripIDsForStops(ctx context.Context, arg GetInServiceTripIDsForStopsParams) ([]string, error) {
 	query := getInServiceTripIDsForStops
 	var queryParams []interface{}
-	queryParams = append(queryParams, arg.SinceMidnight)
+	queryParams = append(queryParams, arg.WindowEnd)
+	queryParams = append(queryParams, arg.WindowStart)
 	if len(arg.StopIds) > 0 {
 		for _, v := range arg.StopIds {
 			queryParams = append(queryParams, v)

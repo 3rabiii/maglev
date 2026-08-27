@@ -1252,10 +1252,12 @@ func TestInServiceTripIDs_BatchesLargeStopSets(t *testing.T) {
 	batched, err := api.inServiceTripIDs(ctx, stopIDs, resolver, map[string]struct{}{})
 	require.NoError(t, err)
 
+	sinceMidnightNs := wallClockSinceMidnightNs(currentTime)
 	singleQuery, err := api.GtfsManager.GtfsDB.Queries.GetInServiceTripIDsForStops(ctx, gtfsdb.GetInServiceTripIDsForStopsParams{
-		StopIds:       stopIDs[:len(stops)],
-		ServiceIds:    serviceIDs,
-		SinceMidnight: nulls.Int64(wallClockSinceMidnightNs(currentTime)),
+		StopIds:     stopIDs[:len(stops)],
+		ServiceIds:  serviceIDs,
+		WindowStart: nulls.Int64(sinceMidnightNs - int64(runningLate)),
+		WindowEnd:   nulls.Int64(sinceMidnightNs + int64(runningEarly)),
 	})
 	require.NoError(t, err)
 

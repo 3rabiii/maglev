@@ -339,7 +339,10 @@ func unionStopTimes(stopTimesByTrip map[string][]gtfsdb.StopTime) []gtfsdb.StopT
 }
 
 // inServiceTripIDs collects trips serving an in-bounds stop whose scheduled
-// span contains the query moment, across the query day and the day before it.
+// span overlaps the running window [sinceMidnight-runningLate,
+// sinceMidnight+runningEarly], across the query day and the day before it —
+// the same grace window trips-for-route's runsOn applies, so a trip that just
+// ended or is about to start is still offered as a candidate here too.
 func (api *RestAPI) inServiceTripIDs(
 	ctx context.Context,
 	stopIDs []string,
@@ -354,11 +357,14 @@ func (api *RestAPI) inServiceTripIDs(
 			continue
 		}
 
+		windowStart := day.sinceMidnightNs - int64(runningLate)
+		windowEnd := day.sinceMidnightNs + int64(runningEarly)
 		tripIDs, err := queryInBatches(ctx, stopIDs, func(ctx context.Context, batch []string) ([]string, error) {
 			return api.GtfsManager.GtfsDB.Queries.GetInServiceTripIDsForStops(ctx, gtfsdb.GetInServiceTripIDsForStopsParams{
-				StopIds:       batch,
-				ServiceIds:    day.serviceIDs,
-				SinceMidnight: nulls.Int64(day.sinceMidnightNs),
+				StopIds:     batch,
+				ServiceIds:  day.serviceIDs,
+				WindowStart: nulls.Int64(windowStart),
+				WindowEnd:   nulls.Int64(windowEnd),
 			})
 		})
 		if err != nil {

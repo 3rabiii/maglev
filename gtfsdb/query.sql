@@ -897,16 +897,19 @@ WHERE
 
 -- name: GetInServiceTripIDsForStops :many
 -- Trips that serve one of the given stops, run on one of the given services, and
--- whose scheduled span contains the given time-since-midnight. The caller passes
--- an offset past 24h to match trips belonging to the previous service day.
+-- whose scheduled span overlaps [window_start, window_end] -- the same
+-- runningLate/runningEarly grace window trips-for-route's runsOn applies, so a
+-- trip that just ended or is about to start is still offered as a candidate.
+-- The caller passes an offset past 24h to match trips belonging to the
+-- previous service day.
 SELECT DISTINCT
     t.id
 FROM
     trips t
     JOIN stop_times st ON st.trip_id = t.id
 WHERE
-    t.min_arrival_time <= sqlc.arg('since_midnight')
-    AND t.max_departure_time >= sqlc.arg('since_midnight')
+    t.min_arrival_time <= sqlc.arg('window_end')
+    AND t.max_departure_time >= sqlc.arg('window_start')
     AND st.stop_id IN (sqlc.slice('stop_ids'))
     AND t.service_id IN (sqlc.slice('service_ids'));
 
