@@ -608,7 +608,8 @@ func frequencyVoteWeight(freq gtfsdb.Frequency) int {
 	if freq.HeadwaySecs <= 0 {
 		return 1
 	}
-	weight := (freq.EndTime - freq.StartTime) / int64(time.Second) / freq.HeadwaySecs
+	durationSecs := (freq.EndTime - freq.StartTime) / int64(time.Second)
+	weight := (durationSecs + freq.HeadwaySecs - 1) / freq.HeadwaySecs
 	if weight <= 0 {
 		return 1
 	}

@@ -348,8 +348,12 @@ func (api *RestAPI) tripsForRouteHandler(w http.ResponseWriter, r *http.Request)
 	serviceDatesByAgency := make(map[string]*serviceDateResolver, len(agencyLocations))
 	for agencyID, loc := range agencyLocations {
 		queryDayMidnight := serviceDateMidnight(currentTime, loc)
-		days := api.serviceIDsForDays(ctx, queryDayMidnight)
-		serviceDatesByAgency[agencyID] = newServiceDateResolverFor(queryDayMidnight, currentTime, days)
+		days, err := api.serviceIDsForDays(ctx, queryDayMidnight)
+		if err != nil {
+			api.serverErrorResponse(w, r, err)
+			return
+		}
+		serviceDatesByAgency[agencyID] = newServiceDateResolverFor(queryDayMidnight, currentTime.In(loc), days)
 	}
 	stopIDsMap := make(map[string]string)
 
@@ -434,7 +438,12 @@ func (api *RestAPI) tripsForRouteHandler(w http.ResponseWriter, r *http.Request)
 		// trip. Per spec, schedule.stopTimes is "scheduled stop times for this
 		// trip" and schedule.previousTripId is "the preceding trip in this
 		// vehicle's block" — both relative to the entry's trip identity.
-		activeMidnight := serviceDatesByAgency[activeAgencyID].Resolve(fetchedTrip)
+		activeResolver, ok := serviceDatesByAgency[activeAgencyID]
+		if !ok {
+			api.Logger.Warn("trips-for-route: missing service date resolver for active agency", "agency_id", activeAgencyID)
+			continue
+		}
+		activeMidnight := activeResolver.Resolve(fetchedTrip)
 
 		entryLocation := currentLocation
 		if loc, ok := agencyLocations[entryAgencyID]; ok {
@@ -442,7 +451,12 @@ func (api *RestAPI) tripsForRouteHandler(w http.ResponseWriter, r *http.Request)
 		}
 		entryMidnight := serviceDateMidnight(currentTime, entryLocation)
 		if entryTrip, ok := tripsByID[entryTripID]; ok {
-			entryMidnight = serviceDatesByAgency[entryAgencyID].Resolve(entryTrip)
+			entryResolver, ok := serviceDatesByAgency[entryAgencyID]
+			if !ok {
+				api.Logger.Warn("trips-for-route: missing service date resolver for entry agency", "agency_id", entryAgencyID)
+				continue
+			}
+			entryMidnight = entryResolver.Resolve(entryTrip)
 		}
 
 		var schedule *models.TripsSchedule

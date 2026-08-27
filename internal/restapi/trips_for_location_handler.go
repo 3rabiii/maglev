@@ -372,7 +372,11 @@ func (api *RestAPI) buildTripsForLocationEntries(
 	for agencyID := range agencyIDs {
 		agencyLocation := request.AgencyLocations[agencyID]
 		queryDayMidnight := serviceDateMidnight(request.CurrentTime, agencyLocation)
-		days := api.serviceIDsForDays(ctx, queryDayMidnight)
+		days, err := api.serviceIDsForDays(ctx, queryDayMidnight)
+		if err != nil {
+			api.serverErrorResponse(w, r, err)
+			return nil, nil
+		}
 		services[agencyID] = days
 		serviceDatesByAgency[agencyID] = newServiceDateResolverFor(
 			queryDayMidnight, request.CurrentTime.In(agencyLocation), days)

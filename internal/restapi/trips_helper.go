@@ -1375,22 +1375,27 @@ func serviceIDSet(serviceIDs []string) map[string]struct{} {
 // a second query with the same service-ID list, the way the block lookup in
 // trips-for-location does. A lookup failure is not fatal — that day comes back
 // empty.
-func (api *RestAPI) serviceIDsForDays(ctx context.Context, queryDayMidnight time.Time) serviceIDsByDay {
-	return serviceIDsByDay{
-		QueryDay:    api.activeServiceIDsForDate(ctx, queryDayMidnight),
-		PreviousDay: api.activeServiceIDsForDate(ctx, queryDayMidnight.AddDate(0, 0, -1)),
+func (api *RestAPI) serviceIDsForDays(ctx context.Context, queryDayMidnight time.Time) (serviceIDsByDay, error) {
+	queryDay, err := api.activeServiceIDsForDate(ctx, queryDayMidnight)
+	if err != nil {
+		return serviceIDsByDay{}, err
 	}
+	prevDay, err := api.activeServiceIDsForDate(ctx, queryDayMidnight.AddDate(0, 0, -1))
+	if err != nil {
+		return serviceIDsByDay{}, err
+	}
+	return serviceIDsByDay{
+		QueryDay:    queryDay,
+		PreviousDay: prevDay,
+	}, nil
 }
 
-func (api *RestAPI) activeServiceIDsForDate(ctx context.Context, day time.Time) []string {
+func (api *RestAPI) activeServiceIDsForDate(ctx context.Context, day time.Time) ([]string, error) {
 	serviceIDs, err := api.GtfsManager.GtfsDB.Queries.GetActiveServiceIDsForDate(ctx, day.Format("20060102"))
 	if err != nil {
-		api.Logger.Warn("failed to fetch active service IDs for service date resolution",
-			"date", day.Format("20060102"), "error", err)
-		return nil
+		return nil, err
 	}
-
-	return serviceIDs
+	return serviceIDs, nil
 }
 
 // Resolve returns midnight of the service date trip belongs to.
