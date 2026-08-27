@@ -2,6 +2,8 @@ package gtfsdb
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -119,20 +121,65 @@ func TestBuildStopAgencyIndex_KeepsEveryAgencyServingAStop(t *testing.T) {
 }
 
 func TestBackfillStopAgencyIndex_FillsEmptyIndex(t *testing.T) {
-	client := newTestClientWithRABA(t)
 	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "raba.db")
+
+	client, err := NewClient(Config{DBPath: dbPath, Env: appconf.Development})
+	require.NoError(t, err)
+
+	rabaBytes, err := os.ReadFile("../testdata/raba.zip")
+	require.NoError(t, err)
+	parsed, err := ParseGtfsData(rabaBytes, "test-raba")
+	require.NoError(t, err)
+	_, err = client.StoreGtfsData(ctx, parsed)
+	require.NoError(t, err)
 
 	// Stand in for a database imported before stop_agencies existed: the feed is loaded
 	// but the index is empty, and the unchanged feed hash means no import will rebuild it.
-	_, err := client.DB.ExecContext(ctx, "DELETE FROM stop_agencies")
+	_, err = client.DB.ExecContext(ctx, "DELETE FROM stop_agencies")
 	require.NoError(t, err)
+	require.NoError(t, client.Close())
 
-	require.NoError(t, client.backfillStopAgencyIndex(ctx))
+	// Reopen through NewClient, the actual startup path, rather than calling
+	// backfillStopAgencyIndex directly.
+	client, err = NewClient(Config{DBPath: dbPath, Env: appconf.Development})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
 
 	var indexed int
 	err = client.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM stop_agencies").Scan(&indexed)
 	require.NoError(t, err)
-	assert.Greater(t, indexed, 0, "backfill should populate an empty index")
+	assert.Greater(t, indexed, 0, "NewClient should backfill an empty index on open")
+}
+
+func TestBackfillStopAgencyIndex_RebuildsLegacySingleColumnPK(t *testing.T) {
+	client := newTestClientWithRABA(t)
+	ctx := context.Background()
+
+	// Stand in for a database created under the pre-composite-key schema: the table
+	// exists with a single-column stop_id PK, already populated with one row per stop.
+	_, err := client.DB.ExecContext(ctx, `
+		DROP TABLE stop_agencies;
+		CREATE TABLE stop_agencies (
+			stop_id TEXT PRIMARY KEY,
+			agency_id TEXT NOT NULL
+		);
+	`)
+	require.NoError(t, err)
+	_, err = client.DB.ExecContext(ctx, `
+		INSERT INTO stop_agencies (stop_id, agency_id)
+		SELECT DISTINCT stop_id, (SELECT id FROM agencies LIMIT 1) FROM stop_times
+	`)
+	require.NoError(t, err)
+
+	require.NoError(t, client.backfillStopAgencyIndex(ctx))
+
+	var pkColumns int
+	err = client.DB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('stop_agencies') WHERE pk > 0`,
+	).Scan(&pkColumns)
+	require.NoError(t, err)
+	assert.Equal(t, 2, pkColumns, "rebuild should leave the table with the composite primary key")
 }
 
 func TestBackfillStopAgencyIndex_SkipsEmptyFeed(t *testing.T) {

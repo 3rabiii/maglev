@@ -169,6 +169,8 @@ CREATE TABLE
 -- one means aggregating stop_times through trips and routes. At feed scale that costs seconds
 -- per query, which is too slow to do while serving a request. Rebuilt from scratch on every
 -- import. A caller wanting a single agency per stop takes MIN(agency_id) GROUP BY stop_id.
+-- IF NOT EXISTS cannot reshape a table created under an earlier, single-column-PK version
+-- of this schema; Client.rebuildLegacyStopAgenciesTable handles that case at startup.
 CREATE TABLE
     IF NOT EXISTS stop_agencies (
         stop_id TEXT NOT NULL,
