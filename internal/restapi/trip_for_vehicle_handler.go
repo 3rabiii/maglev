@@ -20,25 +20,12 @@ func (api *RestAPI) tripForVehicleHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	vehicle, err := api.GtfsManager.GetVehicleByID(vehicleID)
-
-	if err != nil {
-		api.sendNotFound(w, r)
-		return
-	}
-
-	// Return 404 when vehicle has no associated trip (idle vehicle)
-	// or when the trip ID is empty (avoiding a futile DB lookup)
-	if vehicle == nil || vehicle.Trip == nil || vehicle.Trip.ID.ID == "" {
-		api.Logger.Debug("vehicle has no current trip (idle)",
-			"vehicleID", vehicleID, "agencyID", agencyID)
-		api.sendNotFound(w, r)
+	tripID, ok := api.getVehicleTripIDOr404(w, r, agencyID, vehicleID)
+	if !ok {
 		return
 	}
 
 	ctx := r.Context()
-
-	tripID := vehicle.Trip.ID.ID
 
 	agency, err := api.GtfsManager.GtfsDB.Queries.GetAgency(ctx, agencyID)
 	if err != nil {
@@ -88,20 +75,8 @@ func (api *RestAPI) tripForVehicleHandler(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	trip, err := api.GtfsManager.GtfsDB.Queries.GetTrip(ctx, tripID)
-	if err != nil {
-		// If the trip doesn't exist in our DB (sql.ErrNoRows), return 404 instead of 500
-		if errors.Is(err, sql.ErrNoRows) {
-			api.Logger.Warn("vehicle references non-existent trip",
-				"vehicleID", vehicleID, "tripID", tripID, "agencyID", agencyID)
-			api.sendNotFound(w, r)
-			return
-		}
-		api.Logger.Error("database error fetching trip",
-			"error", err,
-			"tripID", tripID,
-			"agencyID", agencyID)
-		api.serverErrorResponse(w, r, err)
+	trip, ok := api.getTripOr404(ctx, w, r, agencyID, vehicleID, tripID)
+	if !ok {
 		return
 	}
 
@@ -248,4 +223,42 @@ func referencedStopIDs(status *models.TripStatus, schedule *models.Schedule) ([]
 	}
 
 	return stopIDs, nil
+}
+
+func (api *RestAPI) getVehicleTripIDOr404(w http.ResponseWriter, r *http.Request, agencyID, vehicleID string) (string, bool) {
+	vehicle, err := api.GtfsManager.GetVehicleByID(vehicleID)
+	if err != nil {
+		api.sendNotFound(w, r)
+		return "", false
+	}
+
+	// Return 404 when vehicle has no associated trip (idle vehicle)
+	// or when the trip ID is empty (avoiding a futile DB lookup)
+	if vehicle == nil || vehicle.Trip == nil || vehicle.Trip.ID.ID == "" {
+		api.Logger.Debug("vehicle has no current trip (idle)",
+			"vehicleID", vehicleID, "agencyID", agencyID)
+		api.sendNotFound(w, r)
+		return "", false
+	}
+	return vehicle.Trip.ID.ID, true
+}
+
+func (api *RestAPI) getTripOr404(ctx context.Context, w http.ResponseWriter, r *http.Request, agencyID, vehicleID, tripID string) (gtfsdb.Trip, bool) {
+	trip, err := api.GtfsManager.GtfsDB.Queries.GetTrip(ctx, tripID)
+	if err != nil {
+		// If the trip doesn't exist in our DB (sql.ErrNoRows), return 404 instead of 500
+		if errors.Is(err, sql.ErrNoRows) {
+			api.Logger.Warn("vehicle references non-existent trip",
+				"vehicleID", vehicleID, "tripID", tripID, "agencyID", agencyID)
+			api.sendNotFound(w, r)
+			return gtfsdb.Trip{}, false
+		}
+		api.Logger.Error("database error fetching trip",
+			"error", err,
+			"tripID", tripID,
+			"agencyID", agencyID)
+		api.serverErrorResponse(w, r, err)
+		return gtfsdb.Trip{}, false
+	}
+	return trip, true
 }
