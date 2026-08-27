@@ -14,15 +14,13 @@ import (
 const buildStopAgencies = `-- name: BuildStopAgencies :exec
 INSERT INTO
     stop_agencies (stop_id, agency_id)
-SELECT
+SELECT DISTINCT
     stop_times.stop_id,
-    MIN(routes.agency_id)
+    routes.agency_id
 FROM
     stop_times
     JOIN trips ON stop_times.trip_id = trips.id
     JOIN routes ON trips.route_id = routes.id
-GROUP BY
-    stop_times.stop_id
 `
 
 func (q *Queries) BuildStopAgencies(ctx context.Context) error {
