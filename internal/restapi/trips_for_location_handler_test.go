@@ -1264,6 +1264,194 @@ func TestInServiceTripIDs_BatchesLargeStopSets(t *testing.T) {
 	assert.ElementsMatch(t, singleQuery, batched)
 }
 
+func tripSpanRow(blockID, tripID string, minArrival, maxDeparture int64) gtfsdb.GetTripSpansForBlocksRow {
+	return gtfsdb.GetTripSpansForBlocksRow{
+		BlockID:          nulls.String(blockID),
+		ID:               tripID,
+		MinArrivalTime:   nulls.Int64(minArrival),
+		MaxDepartureTime: nulls.Int64(maxDeparture),
+	}
+}
+
+// TestTripsForLocationHandler_LayoverIsDiscoveredViaBlock verifies the core
+// gap this PR closes: a bus in a scheduled layover between two block trips —
+// finished the first, hasn't started the second, no live vehicle — is still
+// returned with a schedule-derived position. Per-trip discovery
+// (inServiceTripIDs) cannot find this case: the layover falls inside neither
+// trip's own scheduled span, only the block's combined one.
+//
+// Splits a real shaped trip's own stops into two synthetic trips sharing one
+// block, scheduled two hours apart, and queries exactly at their midpoint —
+// an hour past the first trip's end and an hour before the second trip's
+// start, well outside either trip's own runningLate/runningEarly grace
+// window.
+func TestTripsForLocationHandler_LayoverIsDiscoveredViaBlock(t *testing.T) {
+	api := createTestApiWithClock(t, clock.NewMockClock(tripsForLocationServiceDayClock))
+	defer api.Shutdown()
+	ctx := context.Background()
+	db := api.GtfsManager.GtfsDB.DB
+
+	agencyID := mustGetAgencies(t, api)[0].ID
+
+	// Find a real shaped trip with enough stops to split into two non-trivial
+	// halves, so each synthetic trip has genuine length rather than
+	// collapsing to a single degenerate point.
+	var sourceTripID string
+	var shapeID sql.NullString
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT t.id, t.shape_id FROM trips t JOIN stop_times st ON st.trip_id = t.id
+		 WHERE t.shape_id IS NOT NULL GROUP BY t.id HAVING COUNT(*) >= 4 LIMIT 1`,
+	).Scan(&sourceTripID, &shapeID))
+	require.True(t, shapeID.Valid, "the fixture must have a shaped trip with at least 4 stops")
+
+	rows, err := db.QueryContext(ctx,
+		`SELECT stop_id FROM stop_times WHERE trip_id = ? ORDER BY stop_sequence`, sourceTripID)
+	require.NoError(t, err)
+	var stopIDs []string
+	for rows.Next() {
+		var stopID string
+		require.NoError(t, rows.Scan(&stopID))
+		stopIDs = append(stopIDs, stopID)
+	}
+	require.NoError(t, rows.Close())
+	require.GreaterOrEqual(t, len(stopIDs), 4)
+	firstHalf, secondHalf := stopIDs[:len(stopIDs)/2], stopIDs[len(stopIDs)/2:]
+
+	serviceIDs, err := api.GtfsManager.GtfsDB.Queries.GetActiveServiceIDsForDate(ctx,
+		tripsForLocationServiceDayClock.Format("20060102"))
+	require.NoError(t, err)
+	require.NotEmpty(t, serviceIDs, "the fixture must have service running on this test's clock")
+	serviceID := serviceIDs[0]
+
+	const (
+		blockID    = "test-layover-block"
+		routeID    = "test-layover-route"
+		tripAID    = "test-layover-trip-a"
+		tripBID    = "test-layover-trip-b"
+		hour       = int64(time.Hour)
+		minute     = int64(time.Minute)
+		tripALast  = 11*hour + 10*minute
+		tripBFirst = 13 * hour
+	)
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(ctx, `DELETE FROM stop_times WHERE trip_id IN (?, ?)`, tripAID, tripBID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM trips WHERE id IN (?, ?)`, tripAID, tripBID)
+		_, _ = db.ExecContext(ctx, `DELETE FROM routes WHERE id = ?`, routeID)
+	})
+
+	_, err = db.ExecContext(ctx,
+		`INSERT INTO routes (id, agency_id, short_name, type) VALUES (?, ?, 'test-layover-route', 3)`,
+		routeID, agencyID)
+	require.NoError(t, err)
+
+	insertHalf := func(tripID string, stops []string, startNs int64) {
+		var minArrival, maxDeparture int64 = -1, -1
+		for i, stopID := range stops {
+			ns := startNs + int64(i)*minute
+			if minArrival == -1 {
+				minArrival = ns
+			}
+			maxDeparture = ns
+			_, err := db.ExecContext(ctx,
+				`INSERT INTO stop_times (trip_id, arrival_time, departure_time, stop_id, stop_sequence)
+				 VALUES (?, ?, ?, ?, ?)`,
+				tripID, ns, ns, stopID, i)
+			require.NoError(t, err)
+		}
+		_, err := db.ExecContext(ctx,
+			`INSERT INTO trips (id, route_id, service_id, block_id, shape_id, min_arrival_time, max_departure_time)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			tripID, routeID, serviceID, blockID, shapeID, minArrival, maxDeparture)
+		require.NoError(t, err)
+	}
+
+	insertHalf(tripAID, firstHalf, tripALast-int64(len(firstHalf)-1)*minute)
+	insertHalf(tripBID, secondHalf, tripBFirst)
+
+	// tripsForLocationServiceDayClock is noon; the layover runs from 11:10
+	// (trip A's last stop) to 13:00 (trip B's first stop), so noon is
+	// squarely inside the gap and outside both trips' own grace windows.
+	url := tripsForLocationURL(2.0, 3.0, "includeStatus=true")
+	resp, model := callAPIHandler[TripsForLocationResponse](t, api, url)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	wantTripID := utils.FormCombinedID(agencyID, tripAID)
+	found := false
+	for _, entry := range model.Data.List {
+		if entry.TripId == wantTripID {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found,
+		"a bus in a scheduled layover between two block trips must still be returned via the block's combined span")
+}
+
+// TestSelectBlockAnchors covers the grouping and anchor-selection logic that
+// makes a scheduled layover visible: a block whose combined span brackets the
+// window is kept even when no individual trip in it does.
+func TestSelectBlockAnchors(t *testing.T) {
+	const hour = int64(time.Hour)
+
+	t.Run("a layover between two trips is anchored on the earlier trip", func(t *testing.T) {
+		// trip-a runs 0-1h, trip-b runs 2-3h; the window (1h10m-1h20m) falls
+		// in the gap between them, inside neither trip's own span, but
+		// within the block's combined 0-3h span.
+		spans := []gtfsdb.GetTripSpansForBlocksRow{
+			tripSpanRow("block-1", "trip-a", 0, hour),
+			tripSpanRow("block-1", "trip-b", 2*hour, 3*hour),
+		}
+		anchors := selectBlockAnchors(spans, hour+10*int64(time.Minute), hour+20*int64(time.Minute))
+		require.Len(t, anchors, 1)
+		assert.Equal(t, blockAnchor{blockID: "block-1", tripID: "trip-a"}, anchors[0],
+			"the anchor must be the trip that already started, not the one still ahead")
+	})
+
+	t.Run("a block entirely before the window is dropped", func(t *testing.T) {
+		spans := []gtfsdb.GetTripSpansForBlocksRow{
+			tripSpanRow("block-1", "trip-a", 0, hour),
+		}
+		assert.Empty(t, selectBlockAnchors(spans, 5*hour, 6*hour))
+	})
+
+	t.Run("a block entirely after the window is dropped", func(t *testing.T) {
+		spans := []gtfsdb.GetTripSpansForBlocksRow{
+			tripSpanRow("block-1", "trip-a", 5*hour, 6*hour),
+		}
+		assert.Empty(t, selectBlockAnchors(spans, 0, hour))
+	})
+
+	t.Run("a single-trip block anchors on that trip", func(t *testing.T) {
+		spans := []gtfsdb.GetTripSpansForBlocksRow{
+			tripSpanRow("block-1", "trip-a", 0, hour),
+		}
+		anchors := selectBlockAnchors(spans, 0, hour)
+		require.Len(t, anchors, 1)
+		assert.Equal(t, "trip-a", anchors[0].tripID)
+	})
+
+	t.Run("the anchor is the latest trip that has already started", func(t *testing.T) {
+		spans := []gtfsdb.GetTripSpansForBlocksRow{
+			tripSpanRow("block-1", "trip-a", 0, hour),
+			tripSpanRow("block-1", "trip-b", hour, 2*hour),
+			tripSpanRow("block-1", "trip-c", 3*hour, 4*hour),
+		}
+		// windowEnd falls after trip-b has started but before trip-c has.
+		anchors := selectBlockAnchors(spans, hour+30*int64(time.Minute), hour+40*int64(time.Minute))
+		require.Len(t, anchors, 1)
+		assert.Equal(t, "trip-b", anchors[0].tripID)
+	})
+
+	t.Run("multiple blocks are grouped independently", func(t *testing.T) {
+		spans := []gtfsdb.GetTripSpansForBlocksRow{
+			tripSpanRow("block-1", "trip-a", 0, hour),
+			tripSpanRow("block-2", "trip-b", 0, hour),
+		}
+		anchors := selectBlockAnchors(spans, 0, hour)
+		require.Len(t, anchors, 2)
+	})
+}
+
 // TestTripsForLocationHandler_ScheduledTripsHonorTimeParameter verifies that the
 // time parameter selects which trips are in service, not just how their status
 // is calculated.

@@ -168,6 +168,9 @@ func Prepare(ctx context.Context, db DBTX) (*Queries, error) {
 	if q.getBlockIDByTripIDStmt, err = db.PrepareContext(ctx, getBlockIDByTripID); err != nil {
 		return nil, fmt.Errorf("error preparing query GetBlockIDByTripID: %w", err)
 	}
+	if q.getBlockIDsForStopsStmt, err = db.PrepareContext(ctx, getBlockIDsForStops); err != nil {
+		return nil, fmt.Errorf("error preparing query GetBlockIDsForStops: %w", err)
+	}
 	if q.getBlockTripIndexIDsForBlocksStmt, err = db.PrepareContext(ctx, getBlockTripIndexIDsForBlocks); err != nil {
 		return nil, fmt.Errorf("error preparing query GetBlockTripIndexIDsForBlocks: %w", err)
 	}
@@ -341,6 +344,9 @@ func Prepare(ctx context.Context, db DBTX) (*Queries, error) {
 	}
 	if q.getTripIDsForStopsStmt, err = db.PrepareContext(ctx, getTripIDsForStops); err != nil {
 		return nil, fmt.Errorf("error preparing query GetTripIDsForStops: %w", err)
+	}
+	if q.getTripSpansForBlocksStmt, err = db.PrepareContext(ctx, getTripSpansForBlocks); err != nil {
+		return nil, fmt.Errorf("error preparing query GetTripSpansForBlocks: %w", err)
 	}
 	if q.getTripTimeBoundsByIDsStmt, err = db.PrepareContext(ctx, getTripTimeBoundsByIDs); err != nil {
 		return nil, fmt.Errorf("error preparing query GetTripTimeBoundsByIDs: %w", err)
@@ -647,6 +653,11 @@ func (q *Queries) Close() error {
 			err = fmt.Errorf("error closing getBlockIDByTripIDStmt: %w", cerr)
 		}
 	}
+	if q.getBlockIDsForStopsStmt != nil {
+		if cerr := q.getBlockIDsForStopsStmt.Close(); cerr != nil {
+			err = fmt.Errorf("error closing getBlockIDsForStopsStmt: %w", cerr)
+		}
+	}
 	if q.getBlockTripIndexIDsForBlocksStmt != nil {
 		if cerr := q.getBlockTripIndexIDsForBlocksStmt.Close(); cerr != nil {
 			err = fmt.Errorf("error closing getBlockTripIndexIDsForBlocksStmt: %w", cerr)
@@ -937,6 +948,11 @@ func (q *Queries) Close() error {
 			err = fmt.Errorf("error closing getTripIDsForStopsStmt: %w", cerr)
 		}
 	}
+	if q.getTripSpansForBlocksStmt != nil {
+		if cerr := q.getTripSpansForBlocksStmt.Close(); cerr != nil {
+			err = fmt.Errorf("error closing getTripSpansForBlocksStmt: %w", cerr)
+		}
+	}
 	if q.getTripTimeBoundsByIDsStmt != nil {
 		if cerr := q.getTripTimeBoundsByIDsStmt.Close(); cerr != nil {
 			err = fmt.Errorf("error closing getTripTimeBoundsByIDsStmt: %w", cerr)
@@ -1124,6 +1140,7 @@ type Queries struct {
 	getArrivalsAndDeparturesForStopStmt           *sql.Stmt
 	getBlockDetailsStmt                           *sql.Stmt
 	getBlockIDByTripIDStmt                        *sql.Stmt
+	getBlockIDsForStopsStmt                       *sql.Stmt
 	getBlockTripIndexIDsForBlocksStmt             *sql.Stmt
 	getBlockTripIndexIDsForRouteStmt              *sql.Stmt
 	getBlockTripSequenceStmt                      *sql.Stmt
@@ -1182,6 +1199,7 @@ type Queries struct {
 	getTargetStopTimeWithTotalStopsBySequenceStmt *sql.Stmt
 	getTripStmt                                   *sql.Stmt
 	getTripIDsForStopsStmt                        *sql.Stmt
+	getTripSpansForBlocksStmt                     *sql.Stmt
 	getTripTimeBoundsByIDsStmt                    *sql.Stmt
 	getTripsByBlockIDStmt                         *sql.Stmt
 	getTripsByBlockIDOrderedStmt                  *sql.Stmt
@@ -1256,6 +1274,7 @@ func (q *Queries) WithTx(tx *sql.Tx) *Queries {
 		getArrivalsAndDeparturesForStopStmt:           q.getArrivalsAndDeparturesForStopStmt,
 		getBlockDetailsStmt:                           q.getBlockDetailsStmt,
 		getBlockIDByTripIDStmt:                        q.getBlockIDByTripIDStmt,
+		getBlockIDsForStopsStmt:                       q.getBlockIDsForStopsStmt,
 		getBlockTripIndexIDsForBlocksStmt:             q.getBlockTripIndexIDsForBlocksStmt,
 		getBlockTripIndexIDsForRouteStmt:              q.getBlockTripIndexIDsForRouteStmt,
 		getBlockTripSequenceStmt:                      q.getBlockTripSequenceStmt,
@@ -1314,6 +1333,7 @@ func (q *Queries) WithTx(tx *sql.Tx) *Queries {
 		getTargetStopTimeWithTotalStopsBySequenceStmt: q.getTargetStopTimeWithTotalStopsBySequenceStmt,
 		getTripStmt:                                   q.getTripStmt,
 		getTripIDsForStopsStmt:                        q.getTripIDsForStopsStmt,
+		getTripSpansForBlocksStmt:                     q.getTripSpansForBlocksStmt,
 		getTripTimeBoundsByIDsStmt:                    q.getTripTimeBoundsByIDsStmt,
 		getTripsByBlockIDStmt:                         q.getTripsByBlockIDStmt,
 		getTripsByBlockIDOrderedStmt:                  q.getTripsByBlockIDOrderedStmt,
