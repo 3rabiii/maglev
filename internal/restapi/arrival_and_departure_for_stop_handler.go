@@ -353,11 +353,19 @@ func (api *RestAPI) arrivalAndDepartureForStopHandler(w http.ResponseWriter, r *
 		predicted = true
 	}
 
+	// Fetch the trip's frequency rows once and share them with BuildTripStatus.
+	freqRows, freqErr := api.GtfsManager.GtfsDB.Queries.GetFrequenciesForTrip(ctx, tripID)
+	if freqErr != nil {
+		api.serverErrorResponse(w, r, freqErr)
+		return
+	}
+	freqMap := map[string][]gtfsdb.Frequency{tripID: freqRows}
+
 	// Use serviceMidnight (not the raw user-supplied serviceDate, which may
 	// carry a wall-clock time portion) for all schedule math — matches Java's
 	// BlockInstance contract ("midnight time relative to stop times"; see
 	// BlockInstance.java:69-72) and the plural handler's convention.
-	status, snapshot, statusErr := api.BuildTripStatus(ctx, route.AgencyID, tripID, nil, serviceMidnight, currentTime)
+	status, statusExtras, statusErr := api.BuildTripStatus(ctx, route.AgencyID, tripID, nil, serviceMidnight, currentTime, freqMap)
 	if statusErr != nil {
 		api.Logger.Warn("BuildTripStatus failed",
 			"tripID", tripID, "error", statusErr)
@@ -385,8 +393,8 @@ func (api *RestAPI) arrivalAndDepartureForStopHandler(w http.ResponseWriter, r *
 		// Reuse the snapshot BuildTripStatus already computed for this trip.
 		// It applies the same schedule-deviation shift internally, so
 		// recomputing here just to run metricsForStop was duplicating work.
-		if snapshot != nil {
-			if d, n, ok := snapshot.metricsForStop(tripID, int(targetStopTime.StopSequence)); ok {
+		if statusExtras.snapshot != nil {
+			if d, n, ok := statusExtras.snapshot.metricsForStop(tripID, int(targetStopTime.StopSequence)); ok {
 				distanceFromStop = d
 				numberOfStopsAway = n
 			}
@@ -398,7 +406,7 @@ func (api *RestAPI) arrivalAndDepartureForStopHandler(w http.ResponseWriter, r *
 	blockTripSequence := api.calculateBlockTripSequence(ctx, tripID, serviceMidnight)
 
 	lastUpdateTime := api.GtfsManager.GetVehicleLastUpdateTime(vehicle)
-	situationIDs := api.GetSituationIDsForTrip(r.Context(), tripID)
+	situationIDs, situationRefs := api.situationsFromRefs(statusExtras.situations)
 
 	arrival := models.NewArrivalAndDeparture(
 		utils.FormCombinedID(route.AgencyID, route.ID), // routeID
@@ -429,6 +437,12 @@ func (api *RestAPI) arrivalAndDepartureForStopHandler(w http.ResponseWriter, r *
 		tripStatus,                                     // tripStatus
 		situationIDs,                                   // situationIds
 	)
+
+	// The arrival's frequency uses the window-matched row fetched above.
+	if len(freqRows) > 0 {
+		converted := models.NewFrequencyFromDB(*selectFrequency(freqRows, serviceMidnight, currentTime), serviceMidnight)
+		arrival.Frequency = &converted
+	}
 
 	references := models.NewEmptyReferences()
 
@@ -595,13 +609,7 @@ func (api *RestAPI) arrivalAndDepartureForStopHandler(w http.ResponseWriter, r *
 	}
 	references.Routes = utils.MapValues(routeRefs)
 
-	if len(situationIDs) > 0 {
-		alerts := api.GtfsManager.GetAlertsForTrip(r.Context(), tripID)
-		if len(alerts) > 0 {
-			situations := api.BuildSituationReferences(alerts)
-			references.Situations = append(references.Situations, situations...)
-		}
-	}
+	references.Situations = append(references.Situations, situationRefs...)
 
 	response := models.NewEntryResponse(arrival, *references, api.Clock)
 	api.sendResponse(w, r, response)

@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"time"
 
 	"maglev.onebusaway.org/internal/models"
 	"maglev.onebusaway.org/internal/nulls"
@@ -19,12 +18,15 @@ func (api *RestAPI) routesForLocationHandler(w http.ResponseWriter, r *http.Requ
 
 	var fieldErrors map[string][]string
 	loc, fieldErrors := api.parseLocationParams(r, fieldErrors)
-	maxCount, fieldErrors := utils.ParseMaxCount(queryParams, models.DefaultMaxCountForRoutes, fieldErrors)
+	maxCount, fieldErrors := utils.ParseMaxCountClamped(queryParams, models.DefaultMaxCountForRoutesForLocation, fieldErrors)
 
 	if len(fieldErrors) > 0 {
 		api.validationErrorResponse(w, r, fieldErrors)
 		return
 	}
+
+	// The spec caps this endpoint below the global maxCount ceiling.
+	maxCount = min(maxCount, models.MaxCountForRoutesForLocation)
 
 	query := utils.SanitizeInput(queryParams.Get("query"))
 
@@ -40,7 +42,7 @@ func (api *RestAPI) routesForLocationHandler(w http.ResponseWriter, r *http.Requ
 	}
 
 	ctx := r.Context()
-	routes, isLimitExceeded := api.GtfsManager.GetRoutesForLocation(ctx, loc, query, maxCount, time.Time{})
+	routes, isLimitExceeded := api.GtfsManager.GetRoutesForLocation(ctx, loc, query, maxCount)
 	if len(routes) == 0 {
 		references := models.NewEmptyReferences()
 		response := models.NewListResponseWithRange([]models.Route{}, *references, api.GtfsManager.CheckIfOutOfBounds(loc), api.Clock, false)
@@ -49,11 +51,9 @@ func (api *RestAPI) routesForLocationHandler(w http.ResponseWriter, r *http.Requ
 	}
 
 	var results []models.Route
-	routeIDs := map[string]bool{}
 	agencyIDs := map[string]bool{}
 	for _, route := range routes {
 		agencyIDs[route.AgencyID] = true
-		routeIDs[route.ID] = true
 		results = append(results, models.NewRoute(
 			utils.FormCombinedID(route.AgencyID, route.ID),
 			route.AgencyID,
@@ -67,18 +67,18 @@ func (api *RestAPI) routesForLocationHandler(w http.ResponseWriter, r *http.Requ
 	}
 
 	references := models.NewEmptyReferences()
-
-	agencyIDList := slices.Collect(maps.Keys(agencyIDs))
-	agencies, err := api.GtfsManager.GtfsDB.Queries.GetAgenciesByIDs(ctx, agencyIDList)
-	if err != nil {
-		api.serverErrorResponse(w, r, err)
-		return
+	// Only agencies are referenced here: route beans carry no situation IDs, so
+	// references.situations stays empty even when alerts affect the returned routes.
+	// When includeReferences=false the references block is present but empty.
+	if ShouldIncludeReferences(r) {
+		agencyIDList := slices.Collect(maps.Keys(agencyIDs))
+		agencies, err := api.GtfsManager.GtfsDB.Queries.GetAgenciesByIDs(ctx, agencyIDList)
+		if err != nil {
+			api.serverErrorResponse(w, r, err)
+			return
+		}
+		references.Agencies = buildAgencyReferences(agencies)
 	}
-	references.Agencies = buildAgencyReferences(agencies)
-
-	// Populate situation references for alerts affecting the returned routes
-	alerts := api.collectAlertsForRoutes(slices.Collect(maps.Keys(routeIDs)))
-	references.Situations = api.BuildSituationReferences(alerts)
 
 	// Results must be sorted by ID after maxCount limit is applied.
 	// See how response changes when calling java API with different maxCounts.
