@@ -1344,25 +1344,27 @@ func TestTripsForLocationHandler_LayoverIsDiscoveredViaBlock(t *testing.T) {
 		routeID, agencyID)
 	require.NoError(t, err)
 
+	// The trip row goes in before its stop times: stop_times.trip_id is a
+	// foreign key onto trips.id, so the reverse order only survives on a
+	// connection that happens not to be enforcing foreign keys.
 	insertHalf := func(tripID string, stops []string, startNs int64) {
-		var minArrival, maxDeparture int64 = -1, -1
+		minArrival := startNs
+		maxDeparture := startNs + int64(len(stops)-1)*minute
+
+		_, err := db.ExecContext(ctx,
+			`INSERT INTO trips (id, route_id, service_id, block_id, shape_id, min_arrival_time, max_departure_time)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			tripID, routeID, serviceID, blockID, shapeID, minArrival, maxDeparture)
+		require.NoError(t, err)
+
 		for i, stopID := range stops {
 			ns := startNs + int64(i)*minute
-			if minArrival == -1 {
-				minArrival = ns
-			}
-			maxDeparture = ns
 			_, err := db.ExecContext(ctx,
 				`INSERT INTO stop_times (trip_id, arrival_time, departure_time, stop_id, stop_sequence)
 				 VALUES (?, ?, ?, ?, ?)`,
 				tripID, ns, ns, stopID, i)
 			require.NoError(t, err)
 		}
-		_, err := db.ExecContext(ctx,
-			`INSERT INTO trips (id, route_id, service_id, block_id, shape_id, min_arrival_time, max_departure_time)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			tripID, routeID, serviceID, blockID, shapeID, minArrival, maxDeparture)
-		require.NoError(t, err)
 	}
 
 	insertHalf(tripAID, firstHalf, tripALast-int64(len(firstHalf)-1)*minute)
