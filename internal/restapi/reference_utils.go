@@ -180,10 +180,17 @@ func (api *RestAPI) routeReferenceForTrip(ctx context.Context, routeID string, s
 // appendRouteAgencyReference adds a route's own agency to references when it is not
 // the agency the request was scoped to, so the agencyId a cross-agency route
 // reference carries resolves against references.agencies. A lookup that fails costs
-// the reference rather than the response, as with the route itself.
+// the reference rather than the response, as with the route itself. Safe to call once
+// per route even when several routes share the same foreign agency — an agency
+// already present in references is never added twice.
 func (api *RestAPI) appendRouteAgencyReference(ctx context.Context, references *models.ReferencesModel, routeAgencyID, requestAgencyID string) {
 	if routeAgencyID == requestAgencyID {
 		return
+	}
+	for _, existing := range references.Agencies {
+		if existing.ID == routeAgencyID {
+			return
+		}
 	}
 
 	routeAgency, err := api.GtfsManager.GtfsDB.Queries.GetAgency(ctx, routeAgencyID)
