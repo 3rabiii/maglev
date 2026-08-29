@@ -174,6 +174,22 @@ SET
     max_departure_time = (SELECT MAX(departure_time) FROM stop_times WHERE trip_id = trips.id)
 WHERE min_arrival_time IS NULL OR max_departure_time IS NULL;
 
+-- name: ClearStopAgencies :exec
+-- WHERE TRUE is redundant to SQLite but keeps static analysis from reading this as an
+-- accidentally unbounded DELETE. The table is a derived index and is always cleared whole.
+DELETE FROM stop_agencies WHERE TRUE;
+
+-- name: BuildStopAgencies :exec
+INSERT INTO
+    stop_agencies (stop_id, agency_id)
+SELECT DISTINCT
+    stop_times.stop_id,
+    routes.agency_id
+FROM
+    stop_times
+    JOIN trips ON stop_times.trip_id = trips.id
+    JOIN routes ON trips.route_id = routes.id;
+
 -- name: CreateCalendarDate :one
 INSERT
 OR REPLACE INTO calendar_dates (service_id, date, exception_type)
@@ -263,15 +279,12 @@ FROM
     stops;
 
 -- name: GetStopIDsForAgency :many
-SELECT DISTINCT
-    s.id
+SELECT
+    stop_id
 FROM
-    stops s
-    JOIN stop_times st ON s.id = st.stop_id
-    JOIN trips t ON st.trip_id = t.id
-    JOIN routes r ON t.route_id = r.id
+    stop_agencies
 WHERE
-    r.agency_id = ?;
+    agency_id = ?;
 
 -- name: GetTrip :one
 SELECT

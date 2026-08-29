@@ -11,6 +11,23 @@ import (
 	"strings"
 )
 
+const buildStopAgencies = `-- name: BuildStopAgencies :exec
+INSERT INTO
+    stop_agencies (stop_id, agency_id)
+SELECT DISTINCT
+    stop_times.stop_id,
+    routes.agency_id
+FROM
+    stop_times
+    JOIN trips ON stop_times.trip_id = trips.id
+    JOIN routes ON trips.route_id = routes.id
+`
+
+func (q *Queries) BuildStopAgencies(ctx context.Context) error {
+	_, err := q.exec(ctx, q.buildStopAgenciesStmt, buildStopAgencies)
+	return err
+}
+
 const bulkUpdateTripTimeBounds = `-- name: BulkUpdateTripTimeBounds :exec
 UPDATE trips
 SET
@@ -102,6 +119,17 @@ DELETE FROM shapes
 
 func (q *Queries) ClearShapes(ctx context.Context) error {
 	_, err := q.exec(ctx, q.clearShapesStmt, clearShapes)
+	return err
+}
+
+const clearStopAgencies = `-- name: ClearStopAgencies :exec
+DELETE FROM stop_agencies WHERE TRUE
+`
+
+// WHERE TRUE is redundant to SQLite but keeps static analysis from reading this as an
+// accidentally unbounded DELETE. The table is a derived index and is always cleared whole.
+func (q *Queries) ClearStopAgencies(ctx context.Context) error {
+	_, err := q.exec(ctx, q.clearStopAgenciesStmt, clearStopAgencies)
 	return err
 }
 
@@ -3800,15 +3828,12 @@ func (q *Queries) GetStopForAgency(ctx context.Context, arg GetStopForAgencyPara
 }
 
 const getStopIDsForAgency = `-- name: GetStopIDsForAgency :many
-SELECT DISTINCT
-    s.id
+SELECT
+    stop_id
 FROM
-    stops s
-    JOIN stop_times st ON s.id = st.stop_id
-    JOIN trips t ON st.trip_id = t.id
-    JOIN routes r ON t.route_id = r.id
+    stop_agencies
 WHERE
-    r.agency_id = ?
+    agency_id = ?
 `
 
 func (q *Queries) GetStopIDsForAgency(ctx context.Context, agencyID string) ([]string, error) {
@@ -3819,11 +3844,11 @@ func (q *Queries) GetStopIDsForAgency(ctx context.Context, agencyID string) ([]s
 	defer rows.Close()
 	var items []string
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var stop_id string
+		if err := rows.Scan(&stop_id); err != nil {
 			return nil, err
 		}
-		items = append(items, id)
+		items = append(items, stop_id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
