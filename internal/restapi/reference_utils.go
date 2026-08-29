@@ -29,32 +29,10 @@ func buildAgencyReferences(agencies []gtfsdb.Agency) []models.AgencyReference {
 // of the stop's StaticRouteIDs are returned, each carrying its own agency
 // rather than being overwritten with the caller's.
 func (api *RestAPI) BuildRouteReferences(ctx context.Context, agencyID string, stops []models.Stop) ([]models.Route, error) {
-	routeIDSet := make(map[string]bool)
-	expectedCombinedIDs := make(map[string]bool)
-	originalRouteIDs := make([]string, 0)
-
-	for _, stop := range stops {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
-		for _, routeID := range stop.StaticRouteIDs {
-			routeAgencyID, originalRouteID, err := utils.ExtractAgencyIDAndCodeID(routeID)
-			if err != nil {
-				originalRouteID = routeID
-				routeAgencyID = agencyID
-			}
-
-			combinedID := utils.FormCombinedID(routeAgencyID, originalRouteID)
-			expectedCombinedIDs[combinedID] = true
-
-			if !routeIDSet[originalRouteID] {
-				routeIDSet[originalRouteID] = true
-				originalRouteIDs = append(originalRouteIDs, originalRouteID)
-			}
-		}
+	expectedCombinedIDs, originalRouteIDs, err := expectedRouteIDsForStops(ctx, stops, agencyID)
+	if err != nil {
+		return nil, err
 	}
-
 	if len(originalRouteIDs) == 0 {
 		return []models.Route{}, nil
 	}
@@ -64,21 +42,65 @@ func (api *RestAPI) BuildRouteReferences(ctx context.Context, agencyID string, s
 		return nil, err
 	}
 
-	filteredRoutes := make([]gtfsdb.Route, 0, len(routes))
+	filteredRoutes := filterRoutesByExpectedCombinedID(routes, expectedCombinedIDs, agencyID)
+	return buildRouteModels(ctx, agencyID, filteredRoutes)
+}
+
+// expectedRouteIDsForStops walks every stop's StaticRouteIDs and returns the
+// set of agency-combined IDs a route must match to be a legitimate reference,
+// plus the deduplicated bare route IDs to query the database for. A
+// cancelled context aborts the walk and surfaces ctx.Err() to the caller.
+func expectedRouteIDsForStops(ctx context.Context, stops []models.Stop, agencyID string) (map[string]bool, []string, error) {
+	routeIDSet := make(map[string]bool)
+	expectedCombinedIDs := make(map[string]bool)
+	originalRouteIDs := make([]string, 0)
+
+	for _, stop := range stops {
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
+
+		for _, routeID := range stop.StaticRouteIDs {
+			routeAgencyID, originalRouteID, err := utils.ExtractAgencyIDAndCodeID(routeID)
+			if err != nil {
+				originalRouteID = routeID
+				routeAgencyID = agencyID
+			}
+
+			expectedCombinedIDs[utils.FormCombinedID(routeAgencyID, originalRouteID)] = true
+
+			if !routeIDSet[originalRouteID] {
+				routeIDSet[originalRouteID] = true
+				originalRouteIDs = append(originalRouteIDs, originalRouteID)
+			}
+		}
+	}
+
+	return expectedCombinedIDs, originalRouteIDs, nil
+}
+
+// filterRoutesByExpectedCombinedID keeps only the routes whose real,
+// agency-qualified ID (not the caller's agency) was actually requested by a
+// stop, deduplicating by that combined ID. This is what discards a route
+// that only matched by a bare-ID collision with an unrelated agency.
+func filterRoutesByExpectedCombinedID(routes []gtfsdb.Route, expectedCombinedIDs map[string]bool, agencyID string) []gtfsdb.Route {
+	filtered := make([]gtfsdb.Route, 0, len(routes))
 	seenCombinedIDs := make(map[string]bool)
 	for _, route := range routes {
 		targetAgencyID := route.AgencyID
 		if targetAgencyID == "" {
 			targetAgencyID = agencyID
 		}
-		combinedID := utils.FormCombinedID(targetAgencyID, route.ID)
-		if expectedCombinedIDs[combinedID] && !seenCombinedIDs[combinedID] {
-			seenCombinedIDs[combinedID] = true
-			filteredRoutes = append(filteredRoutes, route)
-		}
-	}
 
-	return buildRouteModels(ctx, agencyID, filteredRoutes)
+		combinedID := utils.FormCombinedID(targetAgencyID, route.ID)
+		if !expectedCombinedIDs[combinedID] || seenCombinedIDs[combinedID] {
+			continue
+		}
+
+		seenCombinedIDs[combinedID] = true
+		filtered = append(filtered, route)
+	}
+	return filtered
 }
 
 // buildRouteModels converts a slice of database routes into model routes.
