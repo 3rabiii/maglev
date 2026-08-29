@@ -1,3 +1,7 @@
+-- foreign_keys is connection-scoped, so this PRAGMA only enforces on the one connection
+-- that runs migrations. Pool-wide enforcement actually comes from the DSN built by
+-- gtfsdb.DSN (see driver_cgo.go / driver_pure.go); this line is kept because it's free
+-- and documents the intent at the schema level.
 PRAGMA foreign_keys = ON;
 
 -- migrate
