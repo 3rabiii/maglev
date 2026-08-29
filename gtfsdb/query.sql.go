@@ -4672,8 +4672,8 @@ WHERE
     t.block_id IN (/*SLICE:block_ids*/?)
     AND t.service_id IN (/*SLICE:service_ids*/?)
 ORDER BY
-    t.block_id,
-    t.min_arrival_time
+    t.block_id ASC,
+    t.min_arrival_time ASC
 `
 
 type GetTripSpansForBlocksParams struct {

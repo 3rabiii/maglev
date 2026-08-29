@@ -286,9 +286,29 @@ func (api *RestAPI) scheduledTripIDsInBounds(
 		return nil, err
 	}
 
+	blocklessVisible, err := api.blocklessScheduledTripIDsInBounds(ctx, stopIDs, bounds, serviceDates, currentTime, positionedTripIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	return append(blockVisible, blocklessVisible...), nil
+}
+
+// blocklessScheduledTripIDsInBounds places the trips that have no block_id by
+// projecting each one's own schedule onto its own shape. Per-trip containment
+// is the right question for them precisely because a blockless trip is its own
+// block, so there is no layover to miss.
+func (api *RestAPI) blocklessScheduledTripIDsInBounds(
+	ctx context.Context,
+	stopIDs []string,
+	bounds utils.CoordinateBounds,
+	serviceDates *serviceDateResolver,
+	currentTime time.Time,
+	positionedTripIDs map[string]struct{},
+) ([]string, error) {
 	candidateIDs, err := api.inServiceTripIDs(ctx, stopIDs, serviceDates, positionedTripIDs)
 	if err != nil || len(candidateIDs) == 0 {
-		return blockVisible, err
+		return nil, err
 	}
 
 	trips, err := queryInBatches(ctx, candidateIDs, api.GtfsManager.GtfsDB.Queries.GetTripsByIDs)
@@ -311,7 +331,7 @@ func (api *RestAPI) scheduledTripIDsInBounds(
 		return nil, err
 	}
 
-	visible := blockVisible
+	var visible []string
 	for _, trip := range trips {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -487,84 +507,137 @@ func (api *RestAPI) blockedScheduledTripIDsInBounds(
 	// One cache across every anchor snapshot computed below, so two anchors
 	// landing in the same shift (e.g. the same block found on both the query
 	// day and the previous day near midnight) share one computation.
-	snapshotCtx := WithSnapshotCache(ctx, newSnapshotCache())
+	scan := &blockCandidateScan{
+		bounds:            bounds,
+		currentTime:       currentTime,
+		positionedTripIDs: positionedTripIDs,
+		seenActiveTrip:    make(map[string]struct{}),
+	}
+	ctx = WithSnapshotCache(ctx, newSnapshotCache())
 	serviceDateForDay := []time.Time{serviceDates.queryDayMidnight, serviceDates.queryDayMidnight.AddDate(0, 0, -1)}
 
-	seenActiveTrip := make(map[string]struct{})
 	var visible []string
-
 	for dayIndex, day := range serviceDates.ServiceDays() {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
 		if len(day.serviceIDs) == 0 {
 			continue
 		}
-
-		blockIDs, err := queryInBatchesReserving(ctx, stopIDs, len(day.serviceIDs),
-			func(ctx context.Context, batch []string) ([]sql.NullString, error) {
-				return api.GtfsManager.GtfsDB.Queries.GetBlockIDsForStops(ctx, gtfsdb.GetBlockIDsForStopsParams{
-					StopIds:    batch,
-					ServiceIds: day.serviceIDs,
-				})
-			})
+		dayVisible, err := api.blockedTripIDsForServiceDay(ctx, stopIDs, day, serviceDateForDay[dayIndex], scan)
 		if err != nil {
 			return nil, err
 		}
-		if len(blockIDs) == 0 {
-			continue
-		}
-
-		blockIDStrings := make([]string, len(blockIDs))
-		for i, blockID := range blockIDs {
-			blockIDStrings[i] = blockID.String
-		}
-
-		spans, err := queryInBatchesReserving(ctx, blockIDStrings, len(day.serviceIDs),
-			func(ctx context.Context, batch []string) ([]gtfsdb.GetTripSpansForBlocksRow, error) {
-				nullableBatch := make([]sql.NullString, len(batch))
-				for i, blockID := range batch {
-					nullableBatch[i] = nulls.String(blockID)
-				}
-				return api.GtfsManager.GtfsDB.Queries.GetTripSpansForBlocks(ctx, gtfsdb.GetTripSpansForBlocksParams{
-					BlockIds:   nullableBatch,
-					ServiceIds: day.serviceIDs,
-				})
-			})
-		if err != nil {
-			return nil, err
-		}
-
-		windowStart := day.sinceMidnightNs - int64(runningLate)
-		windowEnd := day.sinceMidnightNs + int64(runningEarly)
-		serviceDate := serviceDateForDay[dayIndex]
-
-		for _, anchor := range selectBlockAnchors(spans, windowStart, windowEnd) {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-
-			snap := api.computeScheduledBlockSnapshot(snapshotCtx, anchor.tripID, currentTime, serviceDate)
-			if snap == nil || snap.ActiveTripID == "" || !snap.InRange {
-				continue
-			}
-			if _, ok := seenActiveTrip[snap.ActiveTripID]; ok {
-				continue
-			}
-			seenActiveTrip[snap.ActiveTripID] = struct{}{}
-			if _, positioned := positionedTripIDs[snap.ActiveTripID]; positioned {
-				continue
-			}
-
-			pos, _ := positionAndOrientationAtDistance(
-				snap.ActiveTripShape, snap.ActiveTripCumulativeDistances, snap.ActiveTripScheduledDistance)
-			if pos != nil && utils.BoundsContain(bounds, pos.Lat, pos.Lon) {
-				visible = append(visible, snap.ActiveTripID)
-			}
-		}
+		visible = append(visible, dayVisible...)
 	}
 
 	return visible, nil
+}
+
+// blockCandidateScan carries the state one block scan shares across both
+// service days: what counts as in bounds, and which trips are already spoken
+// for by a live vehicle or an earlier day's anchor.
+type blockCandidateScan struct {
+	bounds            utils.CoordinateBounds
+	currentTime       time.Time
+	positionedTripIDs map[string]struct{}
+	seenActiveTrip    map[string]struct{}
+}
+
+// blockedTripIDsForServiceDay resolves one service day's blocks to the active
+// trips that fall inside the search box, recording each one in scan so a block
+// found on both days is only emitted once.
+func (api *RestAPI) blockedTripIDsForServiceDay(
+	ctx context.Context,
+	stopIDs []string,
+	day serviceDay,
+	serviceDate time.Time,
+	scan *blockCandidateScan,
+) ([]string, error) {
+	spans, err := api.tripSpansForBlocksServingStops(ctx, stopIDs, day)
+	if err != nil || len(spans) == 0 {
+		return nil, err
+	}
+
+	windowStart := day.sinceMidnightNs - int64(runningLate)
+	windowEnd := day.sinceMidnightNs + int64(runningEarly)
+
+	var visible []string
+	for _, anchor := range selectBlockAnchors(spans, windowStart, windowEnd) {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		tripID, ok := api.activeTripInBoundsForAnchor(ctx, anchor.tripID, serviceDate, scan)
+		if !ok {
+			continue
+		}
+		visible = append(visible, tripID)
+	}
+	return visible, nil
+}
+
+// tripSpansForBlocksServingStops returns every trip span belonging to a block
+// that serves one of stopIDs on this service day. Time is not filtered here:
+// the window applies to a block's combined span, which the caller tests.
+func (api *RestAPI) tripSpansForBlocksServingStops(
+	ctx context.Context,
+	stopIDs []string,
+	day serviceDay,
+) ([]gtfsdb.GetTripSpansForBlocksRow, error) {
+	blockIDs, err := queryInBatchesReserving(ctx, stopIDs, len(day.serviceIDs),
+		func(ctx context.Context, batch []string) ([]sql.NullString, error) {
+			return api.GtfsManager.GtfsDB.Queries.GetBlockIDsForStops(ctx, gtfsdb.GetBlockIDsForStopsParams{
+				StopIds:    batch,
+				ServiceIds: day.serviceIDs,
+			})
+		})
+	if err != nil || len(blockIDs) == 0 {
+		return nil, err
+	}
+
+	blockIDStrings := make([]string, len(blockIDs))
+	for i, blockID := range blockIDs {
+		blockIDStrings[i] = blockID.String
+	}
+
+	return queryInBatchesReserving(ctx, blockIDStrings, len(day.serviceIDs),
+		func(ctx context.Context, batch []string) ([]gtfsdb.GetTripSpansForBlocksRow, error) {
+			nullableBatch := make([]sql.NullString, len(batch))
+			for i, blockID := range batch {
+				nullableBatch[i] = nulls.String(blockID)
+			}
+			return api.GtfsManager.GtfsDB.Queries.GetTripSpansForBlocks(ctx, gtfsdb.GetTripSpansForBlocksParams{
+				BlockIds:   nullableBatch,
+				ServiceIds: day.serviceIDs,
+			})
+		})
+}
+
+// activeTripInBoundsForAnchor interpolates the anchor's block and reports the
+// shift's active trip when it is running now, has not already been emitted,
+// is not already placed by a live vehicle, and sits inside the search box.
+func (api *RestAPI) activeTripInBoundsForAnchor(
+	ctx context.Context,
+	anchorTripID string,
+	serviceDate time.Time,
+	scan *blockCandidateScan,
+) (string, bool) {
+	snap := api.computeScheduledBlockSnapshot(ctx, anchorTripID, scan.currentTime, serviceDate)
+	if snap == nil || snap.ActiveTripID == "" || !snap.InRange {
+		return "", false
+	}
+	if _, seen := scan.seenActiveTrip[snap.ActiveTripID]; seen {
+		return "", false
+	}
+	scan.seenActiveTrip[snap.ActiveTripID] = struct{}{}
+	if _, positioned := scan.positionedTripIDs[snap.ActiveTripID]; positioned {
+		return "", false
+	}
+
+	pos, _ := positionAndOrientationAtDistance(
+		snap.ActiveTripShape, snap.ActiveTripCumulativeDistances, snap.ActiveTripScheduledDistance)
+	if pos == nil || !utils.BoundsContain(scan.bounds, pos.Lat, pos.Lon) {
+		return "", false
+	}
+	return snap.ActiveTripID, true
 }
 
 func (api *RestAPI) stopTimesByTrip(ctx context.Context, tripIDs []string) (map[string][]gtfsdb.StopTime, error) {

@@ -962,8 +962,8 @@ WHERE
     t.block_id IN (sqlc.slice('block_ids'))
     AND t.service_id IN (sqlc.slice('service_ids'))
 ORDER BY
-    t.block_id,
-    t.min_arrival_time;
+    t.block_id ASC,
+    t.min_arrival_time ASC;
 
 -- name: ListTrips :many
 SELECT
