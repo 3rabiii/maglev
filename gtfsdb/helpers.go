@@ -146,11 +146,13 @@ func createDB(config Config) (*sql.DB, error) {
 	ctx := context.Background()
 	err = configureSQLitePerformance(ctx, db)
 	if err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("error configuring SQLite performance: %w", err)
 	}
 
 	err = performDatabaseMigration(ctx, db)
 	if err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("error performing database migration: %w", err)
 	}
 

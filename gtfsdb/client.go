@@ -43,6 +43,7 @@ func NewClient(config Config) (*Client, error) {
 	// fallback, so a missing or stale index yields an empty combined ID rather than a
 	// merely degraded one - this must succeed before the client is usable.
 	if err := client.backfillStopAgencyIndex(context.Background()); err != nil {
+		_ = client.Close()
 		return nil, fmt.Errorf("unable to backfill stop agency index: %w", err)
 	}
 
