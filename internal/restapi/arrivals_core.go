@@ -95,7 +95,7 @@ func (api *RestAPI) arrivalsForStop(ctx context.Context, in stopArrivalsInput, a
 
 	acc.stopIDs[in.StopCode] = true
 
-	routesLookup, tripsLookup, tripStopCountMap, err := api.batchArrivalEntities(ctx, allActiveStopTimes)
+	routesLookup, tripsLookup, tripStopCountMap, freqMap, err := api.batchArrivalEntities(ctx, allActiveStopTimes)
 	if err != nil {
 		return result, err
 	}
@@ -141,6 +141,7 @@ func (api *RestAPI) arrivalsForStop(ctx context.Context, in stopArrivalsInput, a
 			stopCode:         in.StopCode,
 			stopID:           stopID,
 			totalStopsInTrip: tripStopCountMap[st.TripID],
+			freqMap:          freqMap,
 		}, acc)
 
 		result.Arrivals = append(result.Arrivals, *arrival)
@@ -242,24 +243,27 @@ func (api *RestAPI) stopTimesForServiceDay(
 	return dayStopTimes, nil
 }
 
-// batchArrivalEntities resolves every route, trip and per-trip stop count the
-// matched stop_times need in three queries rather than per row.
+// batchArrivalEntities resolves every route, trip, per-trip stop count and
+// frequency row the matched stop_times need in four queries rather than per
+// row. A frequency fetch failure is fatal — unlike stop count, it cannot
+// silently degrade a field, since BuildTripStatus itself needs the map.
 func (api *RestAPI) batchArrivalEntities(ctx context.Context, allActiveStopTimes []activeStopTime) (
 	routesLookup map[string]gtfsdb.Route,
 	tripsLookup map[string]gtfsdb.Trip,
 	tripStopCountMap map[string]int,
+	freqMap map[string][]gtfsdb.Frequency,
 	err error,
 ) {
 	uniqueRouteIDs, uniqueTripIDs := uniqueRouteAndTripIDs(allActiveStopTimes)
 
 	allRoutes, err := api.GtfsManager.GtfsDB.Queries.GetRoutesByIDs(ctx, uniqueRouteIDs)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	allTrips, err := api.GtfsManager.GtfsDB.Queries.GetTripsByIDs(ctx, uniqueTripIDs)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	routesLookup = make(map[string]gtfsdb.Route, len(allRoutes))
@@ -272,7 +276,15 @@ func (api *RestAPI) batchArrivalEntities(ctx context.Context, allActiveStopTimes
 		tripsLookup[trip.ID] = trip
 	}
 
-	return routesLookup, tripsLookup, api.tripStopCounts(ctx, uniqueTripIDs), nil
+	freqMap = make(map[string][]gtfsdb.Frequency)
+	if len(uniqueTripIDs) > 0 {
+		freqMap, err = api.fetchFrequenciesForTrips(ctx, uniqueTripIDs)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+
+	return routesLookup, tripsLookup, api.tripStopCounts(ctx, uniqueTripIDs), freqMap, nil
 }
 
 // uniqueRouteAndTripIDs collects the distinct route and trip IDs referenced by
@@ -327,6 +339,7 @@ type arrivalInput struct {
 	stopCode         string
 	stopID           string
 	totalStopsInTrip int
+	freqMap          map[string][]gtfsdb.Frequency
 }
 
 // buildArrival turns one matched stop_time into an ArrivalAndDeparture,
@@ -379,7 +392,7 @@ func (api *RestAPI) buildArrival(ctx context.Context, in arrivalInput, acc *arri
 		acc.alertAgencyID = route.AgencyID
 	}
 
-	return models.NewArrivalAndDeparture(
+	arrival := models.NewArrivalAndDeparture(
 		utils.FormCombinedID(route.AgencyID, route.ID),  // routeID
 		route.ShortName.String,                          // routeShortName
 		route.LongName.String,                           // routeLongName
@@ -408,6 +421,22 @@ func (api *RestAPI) buildArrival(ctx context.Context, in arrivalInput, acc *arri
 		tripStatus,                                      // tripStatus
 		situationIDs,                                    // situationIDs
 	)
+
+	applyFrequency(arrival, in.freqMap[st.TripID], in.serviceMidnight, in.queryTime)
+
+	return arrival
+}
+
+// applyFrequency sets arrival.Frequency from the trip's frequency rows, using
+// the row whose window contains queryTime. A trip with no frequency rows
+// leaves Frequency nil — selectFrequency panics on an empty slice, so this
+// guard is load-bearing, not defensive filler.
+func applyFrequency(arrival *models.ArrivalAndDeparture, freqs []gtfsdb.Frequency, serviceMidnight, queryTime time.Time) {
+	if len(freqs) == 0 {
+		return
+	}
+	converted := models.NewFrequencyFromDB(*selectFrequency(freqs, serviceMidnight, queryTime), serviceMidnight)
+	arrival.Frequency = &converted
 }
 
 // combinedVehicleID renders a vehicle's ID in the combined {agency}_{id} form
@@ -438,7 +467,7 @@ func (api *RestAPI) tripStatusForArrival(
 
 	// The vehicle is passed through rather than left nil so BuildTripStatus
 	// does not repeat the GetVehicleForTrip lookup the caller already did.
-	status, extras, err := api.BuildTripStatus(ctx, in.route.AgencyID, st.TripID, vehicle, in.serviceMidnight, in.queryTime)
+	status, extras, err := api.BuildTripStatus(ctx, in.route.AgencyID, st.TripID, vehicle, in.serviceMidnight, in.queryTime, in.freqMap)
 	if err != nil {
 		api.Logger.Warn("BuildTripStatus failed for arrival",
 			"tripID", st.TripID, "error", err)
