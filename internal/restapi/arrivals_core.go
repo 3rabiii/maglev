@@ -663,10 +663,10 @@ func (api *RestAPI) appendStopReferences(ctx context.Context, references *models
 // loadStopReferenceData batch-fetches the stops and their routes in one shot
 // instead of a query per stop.
 //
-// A failed stop lookup is returned: without it every stop reference silently
-// vanishes and the response is a 200 whose entry names stops the client cannot
-// resolve. A failed route lookup only costs each stop its routeIds, so it is
-// logged and the references are still emitted.
+// Both stop and route lookup failures are logged and degrade gracefully: a
+// failed stop lookup costs the response its stop references, and a failed
+// route lookup only costs each stop its routeIds. Neither is worth a 500 for
+// what is otherwise a complete arrivals response.
 func (api *RestAPI) loadStopReferenceData(ctx context.Context, stopIDs []string) (
 	map[string]gtfsdb.Stop,
 	map[string][]gtfsdb.GetRoutesForStopsRow,
@@ -674,7 +674,8 @@ func (api *RestAPI) loadStopReferenceData(ctx context.Context, stopIDs []string)
 ) {
 	stops, err := api.GtfsManager.GtfsDB.Queries.GetStopsByIDs(ctx, stopIDs)
 	if err != nil {
-		return nil, nil, fmt.Errorf("batch fetch stop references: %w", err)
+		api.Logger.Warn("failed to batch fetch stop references", slog.Any("error", err))
+		stops = nil
 	}
 
 	stopsByID := make(map[string]gtfsdb.Stop, len(stops))
