@@ -38,9 +38,12 @@ type arrivalsAccumulator struct {
 	stopIDs    map[string]bool
 	situations *situationCollector
 
-	// alertAgencyID is the agency alerts are namespaced under. It starts as the
-	// caller's primary agency and, only when that is empty, adopts the first
-	// route agency seen.
+	// alertAgencyID is the fallback agency the single-stop handler passes to
+	// situations.add for the stop-level alert lookup. It starts as that
+	// handler's primary agency and, only when that is empty, adopts the first
+	// route agency seen. A multi-stop caller must not rely on this field —
+	// it is single-caller by design and must pass a per-stop agency ID to
+	// situations.add directly instead.
 	alertAgencyID string
 }
 
