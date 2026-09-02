@@ -410,9 +410,7 @@ func (manager *Manager) stopsMatchingCode(
 	bounds := BoundsFromParams(CodeQueryLocation(loc))
 	within := make([]gtfsdb.Stop, 0, len(candidates))
 	for _, stop := range candidates {
-		inBounds := stop.Lat >= bounds.MinLat && stop.Lat <= bounds.MaxLat &&
-			stop.Lon >= bounds.MinLon && stop.Lon <= bounds.MaxLon
-		if inBounds {
+		if utils.BoundsContain(bounds, stop.Lat, stop.Lon) {
 			within = append(within, stop)
 		}
 	}
