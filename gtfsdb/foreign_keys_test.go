@@ -16,6 +16,16 @@ import (
 // non-persistent, so it must ride the DSN to reach every connection in the pool; holding
 // several connections open at once (rather than reusing one via sequential Conn calls) is
 // what actually exercises that.
+func TestDSNAppendsForeignKeysWithCorrectSeparator(t *testing.T) {
+	foreignKeyParam := "_foreign_keys=on"
+	if DriverName == "sqlite" {
+		foreignKeyParam = "_pragma=foreign_keys(1)"
+	}
+
+	assert.Equal(t, "test.db?"+foreignKeyParam, DSN("test.db"))
+	assert.Equal(t, "file:test.db?cache=shared&"+foreignKeyParam, DSN("file:test.db?cache=shared"))
+}
+
 func TestForeignKeysEnabledOnEveryPooledConnection(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "foreign_keys.db")
 	client, err := NewClient(Config{DBPath: dbPath, Env: appconf.Development})
