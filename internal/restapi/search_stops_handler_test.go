@@ -791,6 +791,7 @@ func TestSearchStopsHandlerParentStationCrossAgencyReference(t *testing.T) {
 	db := api.GtfsManager.GtfsDB.DB
 
 	registerFixtureCleanup(t, db,
+		clearIndexedStopAgencies(`'child_stop_cross', 'parent_station_cross'`),
 		`DELETE FROM stop_times WHERE trip_id IN ('child_trip', 'parent_trip')`,
 		`DELETE FROM trips WHERE id IN ('child_trip', 'parent_trip')`,
 		`DELETE FROM routes WHERE id IN ('child_route', 'parent_route')`,
@@ -803,13 +804,13 @@ func TestSearchStopsHandlerParentStationCrossAgencyReference(t *testing.T) {
 		INSERT INTO agencies (id, name, url, timezone) VALUES ('888', 'Agency 888', 'http://agency888.com', 'America/Los_Angeles');
 		INSERT INTO agencies (id, name, url, timezone) VALUES ('999', 'Agency 999', 'http://agency999.com', 'America/Los_Angeles');
 
-		-- Child stop belonging to Agency 888, with parent station
-		INSERT INTO stops (id, name, lat, lon, location_type, parent_station)
-		VALUES ('child_stop_cross', 'Child Stop Cross Agency', 40.0, -120.0, 0, 'parent_station_cross');
-
 		-- Parent station
 		INSERT INTO stops (id, name, lat, lon, location_type)
 		VALUES ('parent_station_cross', 'Parent Station Cross Agency', 40.0, -120.0, 1);
+
+		-- Child stop belonging to Agency 888, with parent station
+		INSERT INTO stops (id, name, lat, lon, location_type, parent_station)
+		VALUES ('child_stop_cross', 'Child Stop Cross Agency', 40.0, -120.0, 0, 'parent_station_cross');
 
 		-- Route serving child stop (Agency 888)
 		INSERT INTO routes (id, agency_id, short_name, type) VALUES ('child_route', '888', 'Child Route', 3);
@@ -826,6 +827,8 @@ func TestSearchStopsHandlerParentStationCrossAgencyReference(t *testing.T) {
 		VALUES ('parent_trip', 'parent_station_cross', 1, 29000, 29000);
 	`)
 	require.NoError(t, err)
+
+	rebuildStopAgencyIndex(t, api)
 
 	resp, stopsResp := callAPIHandler[StopsResponse](t, api, searchStopsURL(url.Values{"input": {"Child Stop Cross"}}))
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
